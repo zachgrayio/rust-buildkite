@@ -1,0 +1,209 @@
+[package]
+name = "rust-buildkite"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+regress = "0.10"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+time = { version = "0.3", features = ["serde", "parsing", "formatting"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+url = "2.5"
+
+[build-dependencies]
+prettyplease = "0.2.37"
+schemars = "0.8"
+serde_json = "1.0.149"
+syn = "2.0.114"
+typify = { git = "https://github.com/zachgrayio/typify", branch = "mixed-types-and-refs" }
+
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"
+
+[lints.clippy]
+indexing_slicing = "deny"
+fallible_impl_from = "deny"
+wildcard_enum_match_arm = "deny"
+unneeded_field_pattern = "deny"
+fn_params_excessive_bools = "deny"
+must_use_candidate = "deny"
+
+[[example]]
+name = "pipelines-list"
+path = "examples/pipelines/list.rs"
+
+[[example]]
+name = "pipelines-create"
+path = "examples/pipelines/create.rs"
+
+[[example]]
+name = "builds-get"
+path = "examples/builds/get.rs"
+
+[[example]]
+name = "annotations-create"
+path = "examples/annotations/create.rs"
+
+[[example]]
+name = "annotations-list-by-build"
+path = "examples/annotations/list_by_build.rs"
+
+[[example]]
+name = "clusters-create"
+path = "examples/clusters/create.rs"
+
+[[example]]
+name = "pipelines-update"
+path = "examples/pipelines/update.rs"
+
+[[example]]
+name = "clusters-list"
+path = "examples/clusters/list.rs"
+
+[[example]]
+name = "clusters-get"
+path = "examples/clusters/get.rs"
+
+[[example]]
+name = "clusters-update"
+path = "examples/clusters/update.rs"
+
+[[example]]
+name = "clusters-delete"
+path = "examples/clusters/delete.rs"
+
+[[example]]
+name = "cluster-tokens-list"
+path = "examples/cluster_tokens/list.rs"
+
+[[example]]
+name = "cluster-tokens-get"
+path = "examples/cluster_tokens/get.rs"
+
+[[example]]
+name = "cluster-tokens-create"
+path = "examples/cluster_tokens/create.rs"
+
+[[example]]
+name = "cluster-tokens-update"
+path = "examples/cluster_tokens/update.rs"
+
+[[example]]
+name = "cluster-tokens-delete"
+path = "examples/cluster_tokens/delete.rs"
+
+[[example]]
+name = "cluster-queues-list"
+path = "examples/cluster_queues/list.rs"
+
+[[example]]
+name = "cluster-queues-get"
+path = "examples/cluster_queues/get.rs"
+
+[[example]]
+name = "cluster-queues-create"
+path = "examples/cluster_queues/create.rs"
+
+[[example]]
+name = "cluster-queues-update"
+path = "examples/cluster_queues/update.rs"
+
+[[example]]
+name = "cluster-queues-delete"
+path = "examples/cluster_queues/delete.rs"
+
+[[example]]
+name = "cluster-queues-pause"
+path = "examples/cluster_queues/pause.rs"
+
+[[example]]
+name = "cluster-queues-resume"
+path = "examples/cluster_queues/resume.rs"
+
+[[example]]
+name = "artifacts-list"
+path = "examples/artifacts/list.rs"
+
+[[example]]
+name = "artifacts-get"
+path = "examples/artifacts/get.rs"
+
+[[example]]
+name = "flaky_tests-list"
+path = "examples/flaky_tests/list.rs"
+
+[[example]]
+name = "rate_limits-get"
+path = "examples/rate_limits/get.rs"
+
+[[example]]
+name = "tests-get"
+path = "examples/tests/get.rs"
+
+[[example]]
+name = "test_runs-get"
+path = "examples/test_runs/get.rs"
+
+[[example]]
+name = "test_runs-list"
+path = "examples/test_runs/list.rs"
+
+[[example]]
+name = "test_suites-list"
+path = "examples/test_suites/list.rs"
+
+[[example]]
+name = "test_suites-create"
+path = "examples/test_suites/create.rs"
+
+[[example]]
+name = "test_suites-get"
+path = "examples/test_suites/get.rs"
+
+[[example]]
+name = "test_suites-update"
+path = "examples/test_suites/update.rs"
+
+[[example]]
+name = "test_suites-delete"
+path = "examples/test_suites/delete.rs"
+
+[[example]]
+name = "package-registries-list"
+path = "examples/package_registries/list.rs"
+
+[[example]]
+name = "package-registries-get"
+path = "examples/package_registries/get.rs"
+
+[[example]]
+name = "packages-get"
+path = "examples/packages/get.rs"
+
+[[example]]
+name = "pipeline-templates-list"
+path = "examples/pipeline_templates/list.rs"
+
+[[example]]
+name = "pipeline-templates-get"
+path = "examples/pipeline_templates/get.rs"
+
+[[example]]
+name = "packages-create"
+path = "examples/packages/create.rs"
+
+[[example]]
+name = "packages-create-presigned"
+path = "examples/packages/create_presigned_upload.rs"

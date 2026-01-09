@@ -1,0 +1,26 @@
+use clap::Parser;
+use rust_buildkite::Client;
+
+#[derive(Parser)]
+struct Args {
+    #[arg(long, env = "BUILDKITE_TOKEN")]
+    token: String,
+    #[arg(long)]
+    org: String,
+    #[arg(long)]
+    registry: String,
+    #[arg(long)]
+    package_id: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+    let client = Client::builder(args.token).build();
+    
+    client.packages.delete(&args.org, &args.registry, &args.package_id).await?;
+    
+    println!("Successfully deleted package '{}'", args.package_id);
+    
+    Ok(())
+}
