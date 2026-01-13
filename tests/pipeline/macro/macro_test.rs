@@ -19,7 +19,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "echo hello",
+                    command: cmd!("echo hello"),
                     label: "Say Hello",
                     key: "hello"
                 }
@@ -37,7 +37,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     label: "Tests",
                     env: {
                         NODE_ENV: "test",
@@ -57,11 +57,11 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "echo first",
+                    command: cmd!("echo first"),
                     key: "first"
                 },
                 command {
-                    command: "echo second",
+                    command: cmd!("echo second"),
                     depends_on: ["first"]
                 }
             ]
@@ -77,7 +77,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     agents: { queue: "default", os: "linux" },
                     branches: ["main", "release/*"],
                     cache: ["node_modules", ".npm"],
@@ -98,7 +98,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     retry: {
                         automatic: { limit: 3 },
                         manual: { allowed: true }
@@ -120,7 +120,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     timeout_in_minutes: 30,
                     parallelism: 4,
                     artifact_paths: ["coverage/**/*", "test-results/*.xml"]
@@ -139,7 +139,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "deploy",
+                    command: cmd!("echo deploy"),
                     concurrency: 1,
                     concurrency_group: "deploy/prod",
                     skip: "Temporarily disabled",
@@ -160,7 +160,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     soft_fail: true,
                     allow_dependency_failure: true
                 }
@@ -177,7 +177,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     matrix: ["node:16", "node:18", "node:20"]
                 }
             ]
@@ -192,7 +192,7 @@ mod object_literal {
         let pipeline = pipeline! {
             steps: [
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     notify: [
                         { slack: "#builds" }
                     ]
@@ -350,7 +350,7 @@ mod object_literal {
     fn trigger_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command { command: "build", key: "build" },
+                command { command: cmd!("echo build"), key: "build" },
                 trigger {
                     trigger: "deploy-service",
                     label: "Deploy",
@@ -387,7 +387,7 @@ mod object_literal {
     fn wait_simple() {
         let pipeline = pipeline! {
             steps: [
-                command { command: "test" },
+                command { command: cmd!("echo test") },
                 wait
             ]
         };
@@ -417,7 +417,7 @@ mod object_literal {
                     group: "Tests",
                     key: "tests",
                     steps: [
-                        command { command: "npm test" }
+                        command { command: cmd!("npm test") }
                     ]
                 }
             ]
@@ -432,13 +432,13 @@ mod object_literal {
     fn group_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command { command: "npm run unit", key: "unit-tests" },
+                command { command: cmd!("npm run unit"), key: "unit-tests" },
                 group {
                     group: "Integration Tests",
                     key: "integration",
                     depends_on: ["unit-tests"],
                     steps: [
-                        command { command: "npm run integration" }
+                        command { command: cmd!("npm run integration") }
                     ],
                     r#if: "build.branch == 'main'",
                     skip: false,
@@ -466,7 +466,7 @@ mod fluent {
     fn command_basic() {
         let pipeline = pipeline! {
             steps: [
-                command("echo hello").label("Hello").key("hello")
+                command(cmd!("echo hello")).label("Hello").key("hello")
             ]
         };
 
@@ -479,7 +479,7 @@ mod fluent {
     fn command_with_env() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .env(NODE_ENV, "test")
                     .env(CI, "true")
             ]
@@ -493,7 +493,7 @@ mod fluent {
     fn command_with_agents() {
         let pipeline = pipeline! {
             steps: [
-                command("deploy").agents({ queue: "deploy" })
+                command(cmd!("echo deploy")).agents({ queue: "deploy" })
             ]
         };
 
@@ -505,7 +505,7 @@ mod fluent {
     fn command_with_retry() {
         let pipeline = pipeline! {
             steps: [
-                command("test").retry_automatic(3)
+                command(cmd!("echo test")).retry_automatic(3)
             ]
         };
 
@@ -518,7 +518,7 @@ mod fluent {
     fn command_with_concurrency() {
         let pipeline = pipeline! {
             steps: [
-                command("deploy")
+                command(cmd!("echo deploy"))
                     .concurrency(1)
                     .concurrency_group("deploy/prod")
             ]
@@ -533,7 +533,7 @@ mod fluent {
     fn command_with_skip_and_priority() {
         let pipeline = pipeline! {
             steps: [
-                command("test")
+                command(cmd!("echo test"))
                     .skip("Temporarily disabled")
                     .priority(10)
             ]
@@ -548,7 +548,7 @@ mod fluent {
     fn command_with_timeout_parallelism_artifacts() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .timeout_in_minutes(30)
                     .parallelism(4)
                     .artifact_paths("coverage/**/*")
@@ -566,7 +566,7 @@ mod fluent {
     fn command_with_branches_cache_if() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .branches("main")
                     .branches("release/*")
                     .cache("node_modules")
@@ -584,8 +584,8 @@ mod fluent {
     fn command_with_depends_on() {
         let pipeline = pipeline! {
             steps: [
-                command("npm install").key("install"),
-                command("npm test")
+                command(cmd!("npm install")).key("install"),
+                command(cmd!("npm test"))
                     .depends_on("install")
             ]
         };
@@ -598,7 +598,7 @@ mod fluent {
     fn command_with_soft_fail_and_allow_dependency_failure() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .soft_fail()
                     .allow_dependency_failure()
             ]
@@ -613,7 +613,7 @@ mod fluent {
     fn command_with_matrix() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .matrix(["node:16", "node:18", "node:20"])
             ]
         };
@@ -626,7 +626,7 @@ mod fluent {
     fn command_with_plugin() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .plugin("docker#v5.0.0", { image: "node:18" })
             ]
         };
@@ -640,7 +640,7 @@ mod fluent {
     fn command_with_notify_slack() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .notify_slack("#builds")
             ]
         };
@@ -654,7 +654,7 @@ mod fluent {
     fn command_with_retry_full() {
         let pipeline = pipeline! {
             steps: [
-                command("npm test")
+                command(cmd!("npm test"))
                     .retry({ automatic: { limit: 3 }, manual: { allowed: true } })
             ]
         };
@@ -681,7 +681,7 @@ mod fluent {
     fn block_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command("npm run build").key("build"),
+                command(cmd!("npm run build")).key("build"),
                 block("Deploy?")
                     .key("approval")
                     .depends_on("build")
@@ -723,7 +723,7 @@ mod fluent {
     fn input_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command("npm run build").key("build"),
+                command(cmd!("npm run build")).key("build"),
                 input("Enter details")
                     .key("details")
                     .depends_on("build")
@@ -780,7 +780,7 @@ mod fluent {
     fn trigger_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command("npm run build").key("build"),
+                command(cmd!("npm run build")).key("build"),
                 trigger("deploy-service")
                     .key("deploy")
                     .label("Deploy")
@@ -833,12 +833,12 @@ mod fluent {
     fn group_comprehensive() {
         let pipeline = pipeline! {
             steps: [
-                command("npm run unit").key("unit"),
+                command(cmd!("npm run unit")).key("unit"),
                 group("Integration")
                     .key("integration")
                     .depends_on("unit")
                     .steps([
-                        command("npm run integration").key("int-test")
+                        command(cmd!("npm run integration")).key("int-test")
                     ])
                     .r#if("build.branch == 'main'")
                     .skip("Disabled")
@@ -867,9 +867,9 @@ mod complex {
                 NODE_ENV: "test"
             },
             steps: [
-                command("npm install").label("Install").key("install"),
+                command(cmd!("npm install")).label("Install").key("install"),
                 command {
-                    command: "npm test",
+                    command: cmd!("npm test"),
                     label: "Test",
                     key: "test",
                     depends_on: ["install"]
@@ -898,19 +898,19 @@ mod complex {
             env: { CI: "true" },
             steps: [
                 command {
-                    command: "cargo fmt --check && cargo clippy",
+                    command: cmd!("cargo fmt --check && cargo clippy"),
                     label: ":rust: Lint",
                     key: "lint"
                 },
                 command {
-                    command: "cargo test",
+                    command: cmd!("cargo test"),
                     label: ":test_tube: Tests",
                     key: "test",
                     retry: { automatic: { limit: 2 } },
                     artifact_paths: ["target/test-results/**/*"]
                 },
                 command {
-                    command: "cargo build --release",
+                    command: cmd!("cargo build --release"),
                     label: ":package: Build",
                     key: "build",
                     depends_on: ["lint", "test"]
@@ -949,7 +949,7 @@ mod complex {
     fn all_step_types() {
         let pipeline = pipeline! {
             steps: [
-                command("echo hello").key("cmd"),
+                command(cmd!("echo hello")).key("cmd"),
                 wait,
                 block("Approve?").key("block"),
                 input("Enter value").key("input"),

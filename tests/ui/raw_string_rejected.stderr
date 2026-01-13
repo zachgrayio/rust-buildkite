@@ -1,0 +1,6 @@
+error: Raw string commands are not allowed. Use cmd!("...") for shell validation.
+       Change: command("...") to command(cmd!("..."))
+ --> tests/ui/raw_string_rejected.rs:8:21
+  |
+8 |             command("npm install").key("install")
+  |                     ^^^^^^^^^^^^^

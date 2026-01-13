@@ -2,6 +2,9 @@
 //!
 //! This crate provides the `pipeline!` macro for declaratively defining
 //! Buildkite pipelines with compile-time validation.
+//!
+//! Shell commands are validated using [bashrs](https://docs.rs/bashrs) for
+//! proper parsing and linting at compile time.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -14,6 +17,97 @@ use syn::{
     punctuated::Punctuated,
     Error, Ident, LitStr, Result, Token,
 };
+
+
+const SHELL_BUILTINS: &[&str] = &[
+    // nb: POSIX builtins
+    ".", ":", "[", "alias", "bg", "cd", "command", "eval", "exec", "exit",
+    "export", "fc", "fg", "getopts", "hash", "jobs", "kill", "newgrp",
+    "pwd", "read", "readonly", "return", "set", "shift", "source", "test",
+    "times", "trap", "type", "ulimit", "umask", "unalias", "unset", "wait",
+    // nb: bash builtins because we always force bash. need to extend this if 
+    // support for other shells is added.
+    "bind", "builtin", "caller", "compgen", "complete", "compopt", "declare",
+    "dirs", "disown", "enable", "help", "history", "let", "local", "logout",
+    "mapfile", "popd", "printf", "pushd", "readarray", "shopt", "suspend",
+    "typeset",
+];
+
+/// Expand known runtime_env keywords to their literal values.
+/// These are recognized by the macro and expanded inline.
+fn expand_known_env_list(ident: &str) -> Option<&'static [&'static str]> {
+    match ident {
+        "SHELL_ENV" => Some(&[
+            "HOME", "PATH", "USER", "SHELL", "PWD", "OLDPWD", "TERM", "HOSTNAME", 
+            "LANG", "LC_ALL", "TZ", "TMPDIR",
+        ]),
+        "BUILDKITE_ENV" => Some(&[
+            "BUILDKITE", "BUILDKITE_AGENT_NAME", "BUILDKITE_BRANCH", "BUILDKITE_BUILD_ID",
+            "BUILDKITE_BUILD_NUMBER", "BUILDKITE_BUILD_URL", "BUILDKITE_COMMIT", 
+            "BUILDKITE_JOB_ID", "BUILDKITE_LABEL", "BUILDKITE_MESSAGE",
+            "BUILDKITE_ORGANIZATION_SLUG", "BUILDKITE_PIPELINE_SLUG", "BUILDKITE_PULL_REQUEST",
+            "BUILDKITE_PULL_REQUEST_BASE_BRANCH", "BUILDKITE_PULL_REQUEST_REPO",
+            "BUILDKITE_REPO", "BUILDKITE_SOURCE", "BUILDKITE_STEP_KEY", "BUILDKITE_TAG",
+            "BUILDKITE_TRIGGERED_FROM_BUILD_ID",
+        ]),
+        "CI_ENV" => Some(&["CI", "CI_BUILD_NUMBER", "CI_COMMIT_SHA", "CI_BRANCH"]),
+        _ => None,
+    }
+}
+
+/// Discover all environment variables on the host machine at compile time.
+/// This provides the default runtime_env list.
+fn discover_host_env_vars() -> HashSet<String> {
+    std::env::vars().map(|(k, _)| k).collect()
+}
+
+/// Discover all executable commands in the host machine's PATH at compile time,
+/// plus shell builtins. This provides the default allowed_commands list.
+fn discover_host_path_commands() -> HashSet<String> {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    
+    let mut commands = HashSet::new();
+    for builtin in SHELL_BUILTINS {
+        commands.insert((*builtin).to_string());
+    }
+    
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        #[cfg(unix)]
+                        {
+                            if let Ok(metadata) = path.metadata() {
+                                let mode = metadata.permissions().mode();
+                                if mode & 0o111 != 0 {
+                                    if let Some(name) = path.file_name() {
+                                        if let Some(name_str) = name.to_str() {
+                                            commands.insert(name_str.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            if let Some(name) = path.file_name() {
+                                if let Some(name_str) = name.to_str() {
+                                    commands.insert(name_str.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    commands
+}
 
 /// Strip the `r#` prefix from raw identifiers.
 /// This allows users to write `r#if` or `r#async` to use Rust keywords as field names.
@@ -91,13 +185,13 @@ impl NestedValue {
     fn to_json_tokens(&self) -> TokenStream2 {
         match self {
             NestedValue::String(s) => {
-                quote! { ::serde_json::Value::String(#s.to_string()) }
+                quote! { ::rust_buildkite::serde_json::Value::String(#s.to_string()) }
             }
             NestedValue::Int(i) => {
-                quote! { ::serde_json::Value::Number(::serde_json::Number::from(#i)) }
+                quote! { ::rust_buildkite::serde_json::Value::Number(::rust_buildkite::serde_json::Number::from(#i)) }
             }
             NestedValue::Bool(b) => {
-                quote! { ::serde_json::Value::Bool(#b) }
+                quote! { ::rust_buildkite::serde_json::Value::Bool(#b) }
             }
             NestedValue::Object(pairs) => {
                 let inserts: Vec<TokenStream2> = pairs
@@ -109,16 +203,16 @@ impl NestedValue {
                     .collect();
                 quote! {
                     {
-                        let mut __obj = ::serde_json::Map::new();
+                        let mut __obj = ::rust_buildkite::serde_json::Map::new();
                         #(#inserts)*
-                        ::serde_json::Value::Object(__obj)
+                        ::rust_buildkite::serde_json::Value::Object(__obj)
                     }
                 }
             }
             NestedValue::Array(items) => {
                 let item_tokens: Vec<TokenStream2> = items.iter().map(|v| v.to_json_tokens()).collect();
                 quote! {
-                    ::serde_json::Value::Array(vec![#(#item_tokens),*])
+                    ::rust_buildkite::serde_json::Value::Array(vec![#(#item_tokens),*])
                 }
             }
         }
@@ -157,13 +251,31 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
 }
 
 /// Top-level pipeline definition
+/// Represents a runtime_env item - either a string literal or a const reference
+enum RuntimeEnvItem {
+    /// A single string literal like "HOME"
+    Literal(String),
+    /// A const reference like SHELL_ENV or rust_buildkite::BUILDKITE_ENV
+    ConstRef(syn::Path),
+}
+
 struct PipelineDef {
+    /// Optional list of allowed commands for validation
+    allowed_commands: Option<Vec<(String, proc_macro2::Span)>>,
+    /// Paths that are allowed to not exist at compile time (validated at runtime instead)
+    allow_missing_paths: Vec<String>,
+    /// Allowed environment variables (in addition to those in env block)
+    /// Can be string literals or const references to &[&str] arrays
+    runtime_env: Option<Vec<RuntimeEnvItem>>,
     env: Option<Vec<(Ident, LitStr)>>,
     steps: Vec<StepDef>,
 }
 
 impl Parse for PipelineDef {
     fn parse(input: ParseStream) -> Result<Self> {
+        let mut allowed_commands = None;
+        let mut allow_missing_paths = Vec::new();
+        let mut runtime_env = None;
         let mut env = None;
         let mut steps = Vec::new();
 
@@ -172,6 +284,93 @@ impl Parse for PipelineDef {
             input.parse::<Token![:]>()?;
 
             match key.to_string().as_str() {
+                "allow_missing_paths" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        let lit: LitStr = content.parse()?;
+                        allow_missing_paths.push(lit.value());
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "runtime_env" => {
+                    let content;
+                    bracketed!(content in input);
+                    let mut vars = Vec::new();
+                    while !content.is_empty() {
+                        if content.peek(LitStr) {
+                            let lit: LitStr = content.parse()?;
+                            vars.push(RuntimeEnvItem::Literal(lit.value()));
+                        } else {
+                            let path: syn::Path = content.parse()?;
+                            let ident_str = path.get_ident().map(|i| i.to_string());
+                            
+                            if let Some(ref name) = ident_str {
+                                if let Some(known_vars) = expand_known_env_list(name) {
+                                    for var in known_vars {
+                                        vars.push(RuntimeEnvItem::Literal(var.to_string()));
+                                    }
+                                } else {
+                                    vars.push(RuntimeEnvItem::ConstRef(path));
+                                }
+                            } else {
+                                vars.push(RuntimeEnvItem::ConstRef(path));
+                            }
+                        }
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                    runtime_env = Some(vars);
+                }
+                "allowed_commands" => {
+                    let content;
+                    bracketed!(content in input);
+                    let mut commands = Vec::new();
+                    while !content.is_empty() {
+                        let cmd_span = content.span();
+                        if content.peek(LitStr) {
+                            let lit: LitStr = content.parse()?;
+                            commands.push((lit.value(), cmd_span));
+                        } else {
+                            let mut cmd_name = String::new();
+                            while !content.is_empty() && !content.peek(Token![,]) {
+                                if content.peek(Token![.]) {
+                                    content.parse::<Token![.]>()?;
+                                    cmd_name.push('.');
+                                } else if content.peek(Token![/]) {
+                                    content.parse::<Token![/]>()?;
+                                    cmd_name.push('/');
+                                } else if content.peek(Token![-]) {
+                                    content.parse::<Token![-]>()?;
+                                    cmd_name.push('-');
+                                } else if content.peek(Token![_]) {
+                                    content.parse::<Token![_]>()?;
+                                    cmd_name.push('_');
+                                } else if content.peek(Ident) {
+                                    let ident: Ident = content.parse()?;
+                                    cmd_name.push_str(&ident.to_string());
+                                } else if content.peek(syn::LitInt) {
+                                    let lit: syn::LitInt = content.parse()?;
+                                    cmd_name.push_str(&lit.to_string());
+                                } else {
+                                    break;
+                                }
+                            }
+                            
+                            if !cmd_name.is_empty() {
+                                commands.push((cmd_name, cmd_span));
+                            }
+                        }
+                        
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                    allowed_commands = Some(commands);
+                }
                 "env" => {
                     let content;
                     braced!(content in input);
@@ -207,7 +406,7 @@ impl Parse for PipelineDef {
             }
         }
 
-        Ok(PipelineDef { env, steps })
+        Ok(PipelineDef { allowed_commands, allow_missing_paths, runtime_env, env, steps })
     }
 }
 
@@ -239,6 +438,17 @@ impl PipelineDef {
                 }
             }
         }
+        let allow_missing: Vec<&str> = self.allow_missing_paths.iter().map(|s| s.as_str()).collect();
+        self.validate_paths(&self.steps, &allow_missing)?;
+        let allowed_names: HashSet<String> = if let Some(allowed) = &self.allowed_commands {
+            allowed.iter().map(|(s, _)| s.clone()).collect()
+        } else {
+            discover_host_path_commands()
+        };
+        let allowed_refs: HashSet<&str> = allowed_names.iter().map(|s| s.as_str()).collect();
+        self.validate_commands(&self.steps, &allowed_refs)?;
+        self.validate_env_vars(&self.steps)?;
+
         let step_tokens: Vec<TokenStream2> = self
             .steps
             .iter()
@@ -252,7 +462,7 @@ impl PipelineDef {
                     quote! {
                         __env_map.insert(
                             #key_str.to_string(),
-                            ::serde_json::Value::String(#v.to_string())
+                            ::rust_buildkite::serde_json::Value::String(#v.to_string())
                         );
                     }
                 })
@@ -260,7 +470,7 @@ impl PipelineDef {
 
             quote! {
                 {
-                    let mut __env_map = ::serde_json::Map::new();
+                    let mut __env_map = ::rust_buildkite::serde_json::Map::new();
                     #(#env_inserts)*
                     Some(::rust_buildkite::Env(__env_map))
                 }
@@ -269,8 +479,23 @@ impl PipelineDef {
             quote! { None }
         };
 
+        // nb: code to "use" any const refs to suppress unused import warnings
+        let const_ref_uses: Vec<TokenStream2> = if let Some(runtime_env) = &self.runtime_env {
+            runtime_env.iter().filter_map(|item| {
+                if let RuntimeEnvItem::ConstRef(path) = item {
+                    Some(quote! { let _ = #path; })
+                } else {
+                    None
+                }
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
         Ok(quote! {
             {
+                #(#const_ref_uses)*
+                
                 let __result: ::rust_buildkite::JsonSchemaForBuildkitePipelineConfigurationFiles = 
                     ::rust_buildkite::JsonSchemaForBuildkitePipelineConfigurationFiles::builder()
                         .steps(::rust_buildkite::PipelineSteps(vec![
@@ -282,6 +507,139 @@ impl PipelineDef {
                 __result
             }
         })
+    }
+
+    /// Validate all command steps against the allowed commands list.
+    /// When allowed_commands is set, the command name must be in the allowed list.
+    /// Note: Raw strings are already rejected at parse time - cmd!() is always required.
+    /// Note: Path-based commands (./script, /path/to/cmd) bypass allowlist - they're validated
+    ///       separately by validate_paths() for existence.
+    fn validate_commands(&self, steps: &[StepDef], allowed: &HashSet<&str>) -> Result<()> {
+        for step in steps {
+            match step {
+                StepDef::Command(cmd_step) => {
+                    if let Some((cmd_name, span)) = cmd_step.get_command_name() {
+                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") {
+                            continue;
+                        }
+                        
+                        if !allowed.contains(cmd_name.as_str()) {
+                            let mut available: Vec<_> = allowed.iter().copied().collect();
+                            available.sort();
+                            return Err(Error::new(
+                                span,
+                                format!(
+                                    "Command '{}' is not in allowed_commands list.\n\
+                                     Available commands: {:?}\n\
+                                     Add '{}' to allowed_commands or use a different command.",
+                                    cmd_name, available, cmd_name
+                                ),
+                            ));
+                        }
+                    }
+                }
+                StepDef::Group(group) => {
+                    self.validate_commands(&group.steps, allowed)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that path-based commands (./script.sh, /usr/bin/env) exist at compile time.
+    /// Paths in allow_missing are skipped (for runtime-only paths).
+    fn validate_paths(&self, steps: &[StepDef], allow_missing: &[&str]) -> Result<()> {
+        for step in steps {
+            match step {
+                StepDef::Command(cmd_step) => {
+                    if let Some((cmd_name, span)) = cmd_step.get_command_name() {
+                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") {
+                            if let Err(e) = CmdExpr::validate_path_exists(&cmd_name, allow_missing) {
+                                return Err(Error::new(span, e));
+                            }
+                        }
+                    }
+                }
+                StepDef::Group(group) => {
+                    self.validate_paths(&group.steps, allow_missing)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that environment variables used in commands are defined.
+    /// Variables must be explicitly defined in: pipeline env block, step env, or runtime_env list.
+    /// If runtime_env is not specified, defaults to host environment variables.
+    fn validate_env_vars(&self, steps: &[StepDef]) -> Result<()> {
+        let mut has_const_refs = false;
+        
+        let mut allowed_vars: HashSet<String> = HashSet::new();
+        if let Some(env_vars) = &self.env {
+            for (name, _) in env_vars {
+                allowed_vars.insert(name.to_string());
+            }
+        }
+        
+        if let Some(runtime_env) = &self.runtime_env {
+            for item in runtime_env {
+                match item {
+                    RuntimeEnvItem::Literal(name) => {
+                        allowed_vars.insert(name.clone());
+                    }
+                    RuntimeEnvItem::ConstRef(_) => {
+                        has_const_refs = true;
+                    }
+                }
+            }
+        } else {
+            allowed_vars.extend(discover_host_env_vars());
+        }
+        
+        if has_const_refs {
+            return Ok(());
+        }
+        
+        self.validate_env_vars_in_steps(steps, &allowed_vars)
+    }
+    
+    fn validate_env_vars_in_steps(&self, steps: &[StepDef], allowed: &HashSet<String>) -> Result<()> {
+        for step in steps {
+            match step {
+                StepDef::Command(cmd_step) => {
+                    let mut step_allowed = allowed.clone();
+                    for (name, _) in &cmd_step.env {
+                        step_allowed.insert(name.clone());
+                    }
+                    
+                    if let Some(cmd_value) = &cmd_step.command {
+                        let span = cmd_value.span();
+                        let undefined_vars = cmd_value.get_undefined_vars();
+                        
+                        for var in undefined_vars {
+                            if !step_allowed.contains(var) {
+                                return Err(Error::new(
+                                    span,
+                                    format!(
+                                        "Environment variable '{}' is not defined.\n\
+                                         Add it to pipeline env: env: {{ {}: \"value\" }}\n\
+                                         Or allow it: runtime_env: [\"{}\"]",
+                                        var, var, var
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                StepDef::Group(group) => {
+                    self.validate_env_vars_in_steps(&group.steps, allowed)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -402,12 +760,45 @@ impl StepDef {
         }
     }
 
-    /// Parse command step with fluent syntax: command("...").method()
+    /// Parse command step with fluent syntax: command(cmd!("...")).method()
+    /// Raw strings are not allowed - must use cmd!() for bashrs validation.
     fn parse_command_fluent(input: ParseStream) -> Result<Self> {
         let content;
         syn::parenthesized!(content in input);
-        let cmd: LitStr = content.parse()?;
-        let mut step = CommandStepDef::new(cmd);
+        let mut step = if content.peek(Ident) {
+            let ident: Ident = content.parse()?;
+            if ident == "cmd" {
+                content.parse::<Token![!]>()?;
+                let cmd_content;
+                syn::parenthesized!(cmd_content in content);
+                let lit: LitStr = cmd_content.parse().map_err(|_| {
+                    Error::new(
+                        cmd_content.span(),
+                        "cmd! requires a string literal, e.g., cmd!(\"npm install\")"
+                    )
+                })?;
+                let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                CommandStepDef::new_with_cmd(cmd_expr)
+            } else {
+                return Err(Error::new(
+                    ident.span(),
+                    format!("expected cmd!(\"...\"), got '{}'", ident),
+                ));
+            }
+        } else if content.peek(LitStr) {
+            let lit: LitStr = content.parse()?;
+            return Err(Error::new(
+                lit.span(),
+                "Raw string commands are not allowed. Use cmd!(\"...\") for shell validation.\n\
+                 Change: command(\"...\") to command(cmd!(\"...\"))"
+            ));
+        } else {
+            return Err(Error::new(
+                content.span(),
+                "expected cmd!(\"...\")",
+            ));
+        };
+        
         while input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
             let method: Ident = input.parse()?;
@@ -570,8 +961,39 @@ impl StepDef {
 
             match strip_raw_ident(&field.to_string()) {
                 "command" => {
-                    let cmd: LitStr = content.parse()?;
-                    step.command = Some(cmd);
+                    if content.peek(Ident) {
+                        let ident: Ident = content.parse()?;
+                        if ident == "cmd" {
+                            content.parse::<Token![!]>()?;
+                            let cmd_content;
+                            syn::parenthesized!(cmd_content in content);
+                            let lit: LitStr = cmd_content.parse().map_err(|_| {
+                                Error::new(
+                                    cmd_content.span(),
+                                    "cmd! requires a string literal, e.g., cmd!(\"npm install\")"
+                                )
+                            })?;
+                            let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                            step.command = Some(CommandValue::new(cmd_expr));
+                        } else {
+                            return Err(Error::new(
+                                ident.span(),
+                                format!("expected cmd!(\"...\"), got '{}'", ident),
+                            ));
+                        }
+                    } else if content.peek(LitStr) {
+                        let lit: LitStr = content.parse()?;
+                        return Err(Error::new(
+                            lit.span(),
+                            "Raw string commands are not allowed. Use cmd!(\"...\") for shell validation.\n\
+                             Change: command: \"...\" to command: cmd!(\"...\")"
+                        ));
+                    } else {
+                        return Err(Error::new(
+                            content.span(),
+                            "expected cmd!(\"...\")"
+                        ));
+                    }
                 }
                 "label" => {
                     step.label = Some(content.parse()?);
@@ -1636,8 +2058,40 @@ impl WaitStepDef {
         }
     }
 }
+/// Represents a validated command via cmd!("...")
+/// All commands must use cmd!() for bashrs validation - raw strings are rejected.
+#[derive(Clone)]
+struct CommandValue(CmdExpr);
+
+impl CommandValue {
+    fn new(cmd: CmdExpr) -> Self {
+        Self(cmd)
+    }
+    
+    /// Get the command string value
+    fn get_command_string(&self) -> String {
+        self.0.command.clone()
+    }
+    
+    /// Get the command name for allowlist validation
+    fn get_command_name(&self) -> String {
+        self.0.command_name.clone()
+    }
+    
+    /// Get undefined vars flagged by bashrs (SC2154)
+    /// These are vars that aren't defined inline in the script
+    fn get_undefined_vars(&self) -> &[String] {
+        &self.0.undefined_vars
+    }
+    
+    /// Get span for error reporting
+    fn span(&self) -> proc_macro2::Span {
+        self.0.span
+    }
+}
+
 struct CommandStepDef {
-    command: Option<LitStr>,
+    command: Option<CommandValue>,
     label: Option<LitStr>,
     key: Option<(String, proc_macro2::Span)>,
     depends_on: Vec<(String, proc_macro2::Span)>,
@@ -1936,9 +2390,9 @@ impl FieldDef {
 }
 
 impl CommandStepDef {
-    fn new(command: LitStr) -> Self {
+    fn new_with_cmd(cmd_expr: CmdExpr) -> Self {
         Self {
-            command: Some(command),
+            command: Some(CommandValue::new(cmd_expr)),
             label: None,
             key: None,
             depends_on: Vec::new(),
@@ -1990,8 +2444,15 @@ impl CommandStepDef {
         }
     }
 
+    /// Get the command name for validation (first word of the command)
+    fn get_command_name(&self) -> Option<(String, proc_macro2::Span)> {
+        self.command.as_ref().map(|cv| (cv.get_command_name(), cv.span()))
+    }
+
     fn to_tokens_inner(&self) -> TokenStream2 {
-        let cmd = self.command.as_ref().expect("command must be set");
+        let cmd_value = self.command.as_ref().expect("command must be set");
+        let cmd_string = cmd_value.get_command_string();
+        let cmd_tokens = quote! { #cmd_string.to_string() };
 
         let label_tokens = if let Some(label) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#label.to_string()))) }
@@ -2053,14 +2514,14 @@ impl CommandStepDef {
                 .iter()
                 .map(|(k, v)| {
                     quote! {
-                        __step_env.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string()));
+                        __step_env.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string()));
                     }
                 })
                 .collect();
 
             quote! {
                 .env({
-                    let mut __step_env = ::serde_json::Map::new();
+                    let mut __step_env = ::rust_buildkite::serde_json::Map::new();
                     #(#env_inserts)*
                     Some(::rust_buildkite::Env(__step_env))
                 })
@@ -2075,14 +2536,14 @@ impl CommandStepDef {
                 .iter()
                 .map(|(k, v)| {
                     quote! {
-                        __step_agents.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string()));
+                        __step_agents.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string()));
                     }
                 })
                 .collect();
 
             quote! {
                 .agents({
-                    let mut __step_agents = ::serde_json::Map::new();
+                    let mut __step_agents = ::rust_buildkite::serde_json::Map::new();
                     #(#agent_inserts)*
                     Some(::rust_buildkite::Agents::Object(::rust_buildkite::AgentsObject(__step_agents)))
                 })
@@ -2138,11 +2599,11 @@ impl CommandStepDef {
             };
             quote! {
                 .retry({
-                    let mut __retry_obj = ::serde_json::Map::new();
+                    let mut __retry_obj = ::rust_buildkite::serde_json::Map::new();
                     #automatic_tokens
                     #manual_tokens
-                    let __retry_value = ::serde_json::Value::Object(__retry_obj);
-                    Some(::serde_json::from_value(__retry_value).expect("invalid retry config"))
+                    let __retry_value = ::rust_buildkite::serde_json::Value::Object(__retry_obj);
+                    Some(::rust_buildkite::serde_json::from_value(__retry_value).expect("invalid retry config"))
                 })
             }
         } else {
@@ -2156,7 +2617,7 @@ impl CommandStepDef {
                     let __plugins_array = vec![#(#plugin_values),*];
                     Some(::rust_buildkite::Plugins::List(
                         ::rust_buildkite::PluginsList(__plugins_array.into_iter().map(|v| {
-                            ::serde_json::from_value(v).expect("invalid plugin")
+                            ::rust_buildkite::serde_json::from_value(v).expect("invalid plugin")
                         }).collect())
                     ))
                 })
@@ -2171,7 +2632,7 @@ impl CommandStepDef {
                 .notify({
                     let __notify_array = vec![#(#notify_values),*];
                     Some(::rust_buildkite::CommandStepNotify(__notify_array.into_iter().map(|v| {
-                        ::serde_json::from_value(v).expect("invalid notify")
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
                     }).collect()))
                 })
             }
@@ -2184,7 +2645,7 @@ impl CommandStepDef {
             quote! {
                 .matrix({
                     let __matrix_value = #matrix_json;
-                    Some(::serde_json::from_value(__matrix_value).expect("invalid matrix"))
+                    Some(::rust_buildkite::serde_json::from_value(__matrix_value).expect("invalid matrix"))
                 })
             }
         } else {
@@ -2231,7 +2692,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::PipelineStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd.to_string())))
+                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
@@ -2260,7 +2721,9 @@ impl CommandStepDef {
     }
 
     fn to_group_step_tokens(&self) -> TokenStream2 {
-        let cmd = self.command.as_ref().expect("command must be set");
+        let cmd_value = self.command.as_ref().expect("command must be set");
+        let cmd_string = cmd_value.get_command_string();
+        let cmd_tokens = quote! { #cmd_string.to_string() };
 
         let label_tokens = if let Some(l) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#l.to_string()))) }
@@ -2318,11 +2781,11 @@ impl CommandStepDef {
 
         let env_tokens = if !self.env.is_empty() {
             let inserts: Vec<TokenStream2> = self.env.iter().map(|(k, v)| {
-                quote! { __env_map.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                quote! { __env_map.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
             }).collect();
             quote! {
                 .env({
-                    let mut __env_map = ::serde_json::Map::new();
+                    let mut __env_map = ::rust_buildkite::serde_json::Map::new();
                     #(#inserts)*
                     Some(::rust_buildkite::Env(__env_map))
                 })
@@ -2333,11 +2796,11 @@ impl CommandStepDef {
 
         let agents_tokens = if !self.agents.is_empty() {
             let inserts: Vec<TokenStream2> = self.agents.iter().map(|(k, v)| {
-                quote! { __agents_map.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                quote! { __agents_map.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
             }).collect();
             quote! {
                 .agents({
-                    let mut __agents_map = ::serde_json::Map::new();
+                    let mut __agents_map = ::rust_buildkite::serde_json::Map::new();
                     #(#inserts)*
                     Some(::rust_buildkite::Agents::Object(::rust_buildkite::AgentsObject(__agents_map)))
                 })
@@ -2380,7 +2843,7 @@ impl CommandStepDef {
                 quote! {
                     .automatic({
                         let __auto_value = #auto_json;
-                        Some(::serde_json::from_value(__auto_value).expect("invalid automatic retry config"))
+                        Some(::rust_buildkite::serde_json::from_value(__auto_value).expect("invalid automatic retry config"))
                     })
                 }
             } else {
@@ -2391,7 +2854,7 @@ impl CommandStepDef {
                 quote! {
                     .manual({
                         let __manual_value = #manual_json;
-                        Some(::serde_json::from_value(__manual_value).expect("invalid manual retry config"))
+                        Some(::rust_buildkite::serde_json::from_value(__manual_value).expect("invalid manual retry config"))
                     })
                 }
             } else {
@@ -2416,7 +2879,7 @@ impl CommandStepDef {
                 .plugins({
                     let __plugins_array = vec![#(#plugin_values),*];
                     Some(::rust_buildkite::Plugins::List(::rust_buildkite::PluginsList(__plugins_array.into_iter().map(|v| {
-                        ::serde_json::from_value(v).expect("invalid plugin")
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid plugin")
                     }).collect())))
                 })
             }
@@ -2430,7 +2893,7 @@ impl CommandStepDef {
                 .notify({
                     let __notify_array = vec![#(#notify_values),*];
                     Some(::rust_buildkite::CommandStepNotify(__notify_array.into_iter().map(|v| {
-                        ::serde_json::from_value(v).expect("invalid notify")
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
                     }).collect()))
                 })
             }
@@ -2443,7 +2906,7 @@ impl CommandStepDef {
             quote! {
                 .matrix({
                     let __matrix_value = #matrix_json;
-                    Some(::serde_json::from_value(__matrix_value).expect("invalid matrix"))
+                    Some(::rust_buildkite::serde_json::from_value(__matrix_value).expect("invalid matrix"))
                 })
             }
         } else {
@@ -2490,7 +2953,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::GroupStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd.to_string())))
+                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
@@ -3138,11 +3601,11 @@ impl TriggerStepDef {
             };
             let env_tokens = if !build.env.is_empty() {
                 let env_inserts: Vec<TokenStream2> = build.env.iter().map(|(k, v)| {
-                    quote! { __build_env.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                    quote! { __build_env.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
                 }).collect();
                 quote! {
                     .env({
-                        let mut __build_env = ::serde_json::Map::new();
+                        let mut __build_env = ::rust_buildkite::serde_json::Map::new();
                         #(#env_inserts)*
                         Some(::rust_buildkite::Env(__build_env))
                     })
@@ -3152,11 +3615,11 @@ impl TriggerStepDef {
             };
             let meta_data_tokens = if !build.meta_data.is_empty() {
                 let md_inserts: Vec<TokenStream2> = build.meta_data.iter().map(|(k, v)| {
-                    quote! { __build_meta.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                    quote! { __build_meta.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
                 }).collect();
                 quote! {
                     .meta_data({
-                        let mut __build_meta = ::serde_json::Map::new();
+                        let mut __build_meta = ::rust_buildkite::serde_json::Map::new();
                         #(#md_inserts)*
                         __build_meta
                     })
@@ -3294,11 +3757,11 @@ impl TriggerStepDef {
             };
             let env_tokens = if !build.env.is_empty() {
                 let env_inserts: Vec<TokenStream2> = build.env.iter().map(|(k, v)| {
-                    quote! { __build_env.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                    quote! { __build_env.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
                 }).collect();
                 quote! {
                     .env({
-                        let mut __build_env = ::serde_json::Map::new();
+                        let mut __build_env = ::rust_buildkite::serde_json::Map::new();
                         #(#env_inserts)*
                         Some(::rust_buildkite::Env(__build_env))
                     })
@@ -3308,11 +3771,11 @@ impl TriggerStepDef {
             };
             let meta_data_tokens = if !build.meta_data.is_empty() {
                 let md_inserts: Vec<TokenStream2> = build.meta_data.iter().map(|(k, v)| {
-                    quote! { __build_meta.insert(#k.to_string(), ::serde_json::Value::String(#v.to_string())); }
+                    quote! { __build_meta.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
                 }).collect();
                 quote! {
                     .meta_data({
-                        let mut __build_meta = ::serde_json::Map::new();
+                        let mut __build_meta = ::rust_buildkite::serde_json::Map::new();
                         #(#md_inserts)*
                         __build_meta
                     })
@@ -3491,7 +3954,7 @@ impl GroupStepDef {
                 .notify({
                     let __notify_array = vec![#(#notify_values),*];
                     Some(::rust_buildkite::BuildNotify(__notify_array.into_iter().map(|v| {
-                        ::serde_json::from_value(v).expect("invalid notify")
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
                     }).collect()))
                 })
             }
@@ -3520,5 +3983,177 @@ impl GroupStepDef {
                     .expect("group step construction failed")
             )
         }
+    }
+}
+
+/// Represents a parsed command from a string literal.
+/// Uses bashrs for proper shell parsing and validation.
+#[derive(Clone)]
+struct CmdExpr {
+    /// The command string
+    command: String,
+    /// The first command name (for allowlist validation)
+    command_name: String,
+    /// Variables that bashrs flagged as undefined (SC2154)
+    /// These need to be validated against pipeline env/runtime_env
+    undefined_vars: Vec<String>,
+    /// Span for error reporting
+    span: proc_macro2::Span,
+}
+
+impl CmdExpr {
+    /// Parse a command from a string literal and validate with bashrs.
+    /// Path existence is validated separately at pipeline level with allow_missing_paths context.
+    fn from_lit_str(lit: &LitStr) -> Result<Self> {
+        let command = lit.value();
+        let span = lit.span();
+
+        let undefined_vars = match Self::validate_with_bashrs(&command) {
+            Ok(vars) => vars,
+            Err(e) => return Err(Error::new(span, e)),
+        };
+        
+        let command_name = Self::extract_command_name(&command);
+        
+        Ok(CmdExpr {
+            command,
+            command_name,
+            undefined_vars,
+            span,
+        })
+    }
+    
+    /// Validate the command string using bashrs linter.
+    /// Returns Ok with list of undefined vars (SC2154), or Err for other issues.
+    /// Undefined vars are passed to pipeline-level validation against env/runtime_env.
+    fn validate_with_bashrs(command: &str) -> std::result::Result<Vec<String>, String> {
+        use bashrs::linter::{lint_shell, Severity};
+        
+        let script = format!("#!/bin/bash\n{}", command);
+        let result = lint_shell(&script);
+        let undefined_vars: Vec<String> = result.diagnostics
+            .iter()
+            .filter(|d| d.code == "SC2154")
+            .filter_map(|d| {
+                let msg = &d.message;
+                if let Some(start) = msg.find('\'') {
+                    if let Some(end) = msg[start+1..].find('\'') {
+                        return Some(msg[start+1..start+1+end].to_string());
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let issues: Vec<_> = result.diagnostics
+            .iter()
+            .filter(|d| {
+                (d.severity == Severity::Error || d.severity == Severity::Warning)
+                && d.code != "SC2154"
+                && d.code != "SC2086"
+            })
+            .collect();
+        
+        if !issues.is_empty() {
+            let error_msgs: Vec<String> = issues
+                .iter()
+                .map(|d| format!("  [{}] {}", d.code, d.message))
+                .collect();
+            return Err(format!(
+                "Shell lint issues:\n{}",
+                error_msgs.join("\n")
+            ));
+        }
+        
+        Ok(undefined_vars)
+    }
+    
+    /// Extract the command name (first word) from a shell command.
+    fn extract_command_name(command: &str) -> String {
+        command
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    }
+    
+    /// Check if the command exists on the filesystem (for path-based commands).
+    /// Returns Ok(()) if valid, Err with message if path doesn't exist.
+    fn validate_path_exists(command_name: &str, allow_missing: &[&str]) -> std::result::Result<(), String> {
+        use std::path::Path;
+        if allow_missing.iter().any(|allowed| *allowed == command_name) {
+            return Ok(());
+        }
+        if command_name.starts_with('/') || command_name.starts_with("./") {
+            let path = Path::new(command_name);
+            if !path.exists() {
+                return Err(format!(
+                    "Command path '{}' does not exist on the build machine.\n\
+                     If this path will exist at runtime, add it to allow_missing_paths.",
+                    command_name
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = path.metadata() {
+                    let mode = metadata.permissions().mode();
+                    if mode & 0o111 == 0 {
+                        return Err(format!(
+                            "Command path '{}' exists but is not executable (mode: {:o}).",
+                            command_name, mode
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Generate code that produces the command string.
+    fn to_tokens(&self) -> TokenStream2 {
+        let cmd = &self.command;
+        quote! { #cmd.to_string() }
+    }
+}
+
+/// A macro for defining shell commands with bashrs validation.
+///
+/// This macro accepts a **string literal** containing a shell command.
+/// At compile time, bashrs parses and lints the command for errors.
+///
+/// # Example
+///
+/// ```ignore
+/// use rust_buildkite::cmd;
+///
+/// // Simple command
+/// let c = cmd!("npm install --save-dev");
+///
+/// // Complex command with operators
+/// let c = cmd!("npm install && npm test");
+///
+/// // With Rust format interpolation
+/// let env = "production";
+/// let c = cmd!(&format!("./deploy.sh {}", env));
+/// ```
+#[proc_macro]
+pub fn cmd(input: TokenStream) -> TokenStream {
+    let lit = match syn::parse::<LitStr>(input) {
+        Ok(lit) => lit,
+        Err(_) => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "cmd! requires a string literal, e.g., cmd!(\"npm install\")"
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    match CmdExpr::from_lit_str(&lit) {
+        Ok(cmd_expr) => cmd_expr.to_tokens().into(),
+        Err(err) => err.to_compile_error().into(),
     }
 }

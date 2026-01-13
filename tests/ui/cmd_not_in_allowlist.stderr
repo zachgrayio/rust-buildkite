@@ -1,0 +1,15 @@
+error: Command 'docker' is not in allowed_commands list.
+       Available commands: ["cargo", "npm"]
+       Add 'docker' to allowed_commands or use a different command.
+ --> tests/ui/cmd_not_in_allowlist.rs:9:26
+  |
+9 |             command(cmd!("docker build .")).key("build")
+  |                          ^^^^^^^^^^^^^^^^
+
+warning: unused import: `cmd`
+ --> tests/ui/cmd_not_in_allowlist.rs:3:22
+  |
+3 | use rust_buildkite::{cmd, pipeline};
+  |                      ^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

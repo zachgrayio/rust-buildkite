@@ -30,7 +30,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
 
     let command_step = PipelineStepsItem::CommandStep(
         CommandStep::builder()
-            .command(Some(CommandStepCommand::String("npm test".to_string())))
+            .command(Some(CommandStepCommand::String("echo test".to_string())))
             .label(Some(Label("Run Tests".to_string())))
             .key(Some("test".to_string().try_into().expect("key")))
             .env(Some(Env(cmd_env)))
@@ -206,7 +206,7 @@ fn build_pipeline_with_macro() -> JsonSchemaForBuildkitePipelineConfigurationFil
         },
         steps: [
             command {
-                command: "npm test",
+                command: cmd!("echo test"),
                 label: "Run Tests",
                 key: "test",
                 env: { DEBUG: "1" },
@@ -284,7 +284,7 @@ fn build_pipeline_with_macro() -> JsonSchemaForBuildkitePipelineConfigurationFil
                 depends_on: ["deploy"],
                 steps: [
                     command {
-                        command: "npm run integration",
+                        command: cmd!("npm run integration"),
                         label: "Integration Tests",
                         key: "integration"
                     }

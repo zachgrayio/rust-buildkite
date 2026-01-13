@@ -1,0 +1,404 @@
+//! Tests for the cmd! macro and allowed_commands validation
+//!
+//! This module tests:
+//! 1. Basic cmd! usage - bashrs-validated shell commands
+//! 2. Allowed commands validation
+//! 3. Integration with pipeline! macro
+//!
+//! Note: cmd! now uses string literals: cmd!("npm install")
+//! bashrs validates shell syntax at compile time.
+
+use rust_buildkite::{cmd, pipeline};
+
+mod basic_cmd {
+    use super::*;
+
+    #[test]
+    fn simple_command() {
+        let c = cmd!("echo hello");
+        assert_eq!(c, "echo hello");
+    }
+
+    #[test]
+    fn command_with_flags() {
+        let c = cmd!("npm install --save-dev");
+        assert_eq!(c, "npm install --save-dev");
+    }
+
+    #[test]
+    fn command_with_arguments() {
+        let c = cmd!("cargo build --release --target x86_64-unknown-linux-gnu");
+        assert_eq!(c, "cargo build --release --target x86_64-unknown-linux-gnu");
+    }
+
+    #[test]
+    fn command_with_path() {
+        let c = cmd!("./deploy.sh");
+        assert_eq!(c, "./deploy.sh");
+    }
+
+    #[test]
+    fn command_with_absolute_path() {
+        let c = cmd!("/usr/bin/env bash");
+        assert_eq!(c, "/usr/bin/env bash");
+    }
+
+    #[test]
+    fn command_with_pipe() {
+        let c = cmd!("ls -la | grep test");
+        assert_eq!(c, "ls -la | grep test");
+    }
+
+    #[test]
+    fn command_with_and() {
+        let c = cmd!("npm install && npm test");
+        assert_eq!(c, "npm install && npm test");
+    }
+
+    #[test]
+    fn command_with_or() {
+        let c = cmd!("test -f file.txt || touch file.txt");
+        assert_eq!(c, "test -f file.txt || touch file.txt");
+    }
+
+    #[test]
+    fn command_with_semicolon() {
+        let c = cmd!("echo hello; echo world");
+        assert_eq!(c, "echo hello; echo world");
+    }
+
+    #[test]
+    fn command_with_redirect() {
+        let c = cmd!("echo hello > output.txt");
+        assert_eq!(c, "echo hello > output.txt");
+    }
+
+    #[test]
+    fn command_with_append() {
+        let c = cmd!("echo hello >> output.txt");
+        assert_eq!(c, "echo hello >> output.txt");
+    }
+
+    #[test]
+    fn multiline_command_raw_string() {
+        let c = cmd!(
+            r#"
+            set -e
+            npm install
+            npm test
+            npm run build
+        "#
+        );
+        assert!(c.contains("set -e"));
+        assert!(c.contains("npm install"));
+        assert!(c.contains("npm test"));
+        assert!(c.contains("npm run build"));
+    }
+
+    #[test]
+    fn multiline_command_with_heredoc() {
+        let c = cmd!(
+            r#"cat <<EOF
+Hello World
+This is a multiline heredoc
+EOF"#
+        );
+        assert!(c.contains("<<EOF"));
+        assert!(c.contains("Hello World"));
+    }
+
+    #[test]
+    fn multiline_preserves_newlines() {
+        let c = cmd!("echo 'line1'\necho 'line2'");
+        assert!(c.contains('\n'));
+    }
+
+    #[test]
+    fn command_with_quoted_string() {
+        let c = cmd!("echo 'hello world'");
+        assert!(c.contains("hello world"));
+    }
+
+    #[test]
+    fn command_with_env_var() {
+        let c = cmd!("FOO=bar ./script.sh");
+        assert_eq!(c, "FOO=bar ./script.sh");
+    }
+}
+
+mod runtime_interpolation {
+
+    #[test]
+    fn runtime_interpolation_without_cmd_macro() {
+        let package = "lodash";
+        let c = format!("npm install {}", package);
+        assert_eq!(c, "npm install lodash");
+    }
+
+    #[test]
+    fn multiple_runtime_variables() {
+        let env = "production";
+        let region = "us-east-1";
+        let c = format!("./deploy.sh {} {}", env, region);
+        assert_eq!(c, "./deploy.sh production us-east-1");
+    }
+}
+
+mod pipeline_integration {
+    use super::*;
+
+    #[test]
+    fn command_with_cmd_macro() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!("npm install")).key("install"),
+                command(cmd!("npm test")).key("test").depends_on("install")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("npm test"));
+    }
+
+    #[test]
+    fn object_literal_with_cmd() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("cargo build --release"),
+                    label: "Build",
+                    key: "build"
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("cargo build --release"));
+        assert!(yaml.contains("label: Build"));
+    }
+
+    #[test]
+    fn mixed_syntax_with_cmd() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!("npm install")).key("install"),
+                command {
+                    command: cmd!("npm test"),
+                    key: "test",
+                    depends_on: ["install"]
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("npm test"));
+    }
+}
+
+mod allowed_commands {
+    use super::*;
+
+    #[test]
+    fn valid_commands_in_allowlist() {
+        let pipeline = pipeline! {
+            allowed_commands: ["npm", "cargo", "echo"],
+            steps: [
+                command(cmd!("npm install")).key("install"),
+                command(cmd!("cargo build")).key("build"),
+                command(cmd!("echo done")).key("done")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("cargo build"));
+        assert!(yaml.contains("echo done"));
+    }
+
+    #[test]
+    fn path_command_in_allowlist() {
+        let pipeline = pipeline! {
+            allowed_commands: ["./deploy.sh", "/usr/bin/env"],
+            allow_missing_paths: ["./deploy.sh"],
+            steps: [
+                command(cmd!("./deploy.sh production")).key("deploy"),
+                command(cmd!("/usr/bin/env bash -c 'echo hi'")).key("bash")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("./deploy.sh production"));
+    }
+
+    #[test]
+    fn hyphenated_command_in_allowlist() {
+        let pipeline = pipeline! {
+            allowed_commands: ["docker-compose"],
+            steps: [
+                command(cmd!("docker-compose up -d")).key("compose")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("docker-compose up -d"));
+    }
+
+    #[test]
+    fn allowlist_with_object_literal() {
+        let pipeline = pipeline! {
+            allowed_commands: ["npm"],
+            steps: [
+                command {
+                    command: cmd!("npm test"),
+                    label: "Test",
+                    key: "test"
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("npm test"));
+    }
+
+    #[test]
+    fn allowlist_in_group_steps() {
+        let pipeline = pipeline! {
+            allowed_commands: ["npm", "cargo"],
+            steps: [
+                group {
+                    group: "Build",
+                    key: "build-group",
+                    steps: [
+                        command(cmd!("npm install")).key("install"),
+                        command(cmd!("cargo build")).key("build")
+                    ]
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("cargo build"));
+    }
+
+    #[test]
+    fn default_uses_host_path_commands() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!("echo hello")).key("echo"),
+                command(cmd!("npm install")).key("npm")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("echo hello"));
+        assert!(yaml.contains("npm install"));
+    }
+}
+
+mod runtime_env {
+    use super::*;
+
+    #[test]
+    fn env_vars_from_pipeline_env_block() {
+        let pipeline = pipeline! {
+            env: {
+                MY_VAR: "value"
+            },
+            steps: [
+                command(cmd!(r#"echo "$MY_VAR""#)).key("test")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$MY_VAR"));
+    }
+
+    #[test]
+    fn env_vars_from_step_env() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!(r#"echo "$STEP_VAR""#))
+                    .key("test")
+                    .env(STEP_VAR, "value")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$STEP_VAR"));
+    }
+
+    #[test]
+    fn runtime_env_permits_vars() {
+        let pipeline = pipeline! {
+            runtime_env: ["HOME", "PATH", "USER"],
+            steps: [
+                command(cmd!(r#"echo "$HOME" "$PATH" "$USER""#)).key("test")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$HOME"));
+    }
+
+    #[test]
+    fn combined_env_sources() {
+        let pipeline = pipeline! {
+            env: {
+                PIPELINE_VAR: "p"
+            },
+            runtime_env: ["ALLOWED_VAR"],
+            steps: [
+                command(cmd!(r#"echo "$PIPELINE_VAR" "$STEP_VAR" "$ALLOWED_VAR""#))
+                    .key("test")
+                    .env(STEP_VAR, "s")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$PIPELINE_VAR"));
+        assert!(yaml.contains("$STEP_VAR"));
+        assert!(yaml.contains("$ALLOWED_VAR"));
+    }
+
+    #[test]
+    fn shell_builtins_allowed() {
+        let pipeline = pipeline! {
+            runtime_env: ["HOME", "PROJECT_DIR"],
+            steps: [
+                command(cmd!(r#"cd "$HOME" && pwd"#)).key("cd"),
+                command(cmd!("export FOO=bar")).key("export"),
+                command(cmd!("read -r LINE")).key("read"),
+                command(cmd!("set -e")).key("set"),
+                command(cmd!(r#"source "$PROJECT_DIR/env.sh""#)).key("source"),
+                command(cmd!("test -f /etc/passwd")).key("test"),
+                command(cmd!("[ -d /tmp ]")).key("bracket")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains(r#"cd "$HOME" && pwd"#));
+        assert!(yaml.contains("export FOO=bar"));
+        assert!(yaml.contains("read -r LINE"));
+        assert!(yaml.contains("set -e"));
+        assert!(yaml.contains("source"));
+        assert!(yaml.contains("test -f"));
+        assert!(yaml.contains("[ -d"));
+    }
+
+    #[test]
+    fn default_to_host_env_when_runtime_env_not_specified() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!(r#"echo "$HOME""#)).key("home"),
+                command(cmd!(r#"echo "$PATH""#)).key("path")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$HOME"));
+        assert!(yaml.contains("$PATH"));
+    }
+}

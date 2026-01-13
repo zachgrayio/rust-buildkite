@@ -1,0 +1,7 @@
+error: Environment variable 'UNDEFINED_VAR' is not defined.
+       Add it to pipeline env: env: { UNDEFINED_VAR: "value" }
+       Or allow it: runtime_env: ["UNDEFINED_VAR"]
+ --> tests/ui/undefined_variable.rs:8:26
+  |
+8 |             command(cmd!("echo $UNDEFINED_VAR")).key("test")
+  |                          ^^^^^^^^^^^^^^^^^^^^^
