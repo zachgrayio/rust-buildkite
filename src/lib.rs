@@ -1,6 +1,28 @@
 //! A Rust library for the Buildkite API.
 //!
 //! This library provides a client for the Buildkite API with typed requests and responses.
+//!
+//! # Pipeline DSL
+//!
+//! Use the `pipeline!` macro for declarative, type-safe pipeline definitions:
+//!
+//! ```ignore
+//! use rust_buildkite::pipeline;
+//!
+//! let p = pipeline! {
+//!     env: { CI: "true" },
+//!     steps: [
+//!         command("echo hello").label("Say Hello").key("hello"),
+//!         command("npm test").key("tests").depends_on("hello"),
+//!         wait,
+//!         block("Deploy?"),
+//!         command("./deploy.sh").depends_on("tests")
+//!     ]
+//! };
+//! ```
+
+// Re-export the pipeline macro
+pub use rust_buildkite_macros::pipeline;
 
 #[allow(
     dead_code,

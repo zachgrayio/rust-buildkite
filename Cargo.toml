@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1"
 regress = "0.10"
+rust-buildkite-macros = { path = "rust-buildkite-macros" }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -41,174 +42,186 @@ unneeded_field_pattern = "deny"
 fn_params_excessive_bools = "deny"
 must_use_candidate = "deny"
 
+[[test]]
+name = "client"
+path = "tests/client/mod.rs"
+
+[[test]]
+name = "pipeline"
+path = "tests/pipeline/mod.rs"
+
 [[example]]
 name = "pipelines-list"
-path = "api_examples/pipelines/list.rs"
+path = "examples/api/pipelines/list.rs"
 
 [[example]]
 name = "pipelines-create"
-path = "api_examples/pipelines/create.rs"
+path = "examples/api/pipelines/create.rs"
 
 [[example]]
 name = "builds-get"
-path = "api_examples/builds/get.rs"
+path = "examples/api/builds/get.rs"
 
 [[example]]
 name = "annotations-create"
-path = "api_examples/annotations/create.rs"
+path = "examples/api/annotations/create.rs"
 
 [[example]]
 name = "annotations-list-by-build"
-path = "api_examples/annotations/list_by_build.rs"
+path = "examples/api/annotations/list_by_build.rs"
 
 [[example]]
 name = "clusters-create"
-path = "api_examples/clusters/create.rs"
+path = "examples/api/clusters/create.rs"
 
 [[example]]
 name = "pipelines-update"
-path = "api_examples/pipelines/update.rs"
+path = "examples/api/pipelines/update.rs"
 
 [[example]]
 name = "clusters-list"
-path = "api_examples/clusters/list.rs"
+path = "examples/api/clusters/list.rs"
 
 [[example]]
 name = "clusters-get"
-path = "api_examples/clusters/get.rs"
+path = "examples/api/clusters/get.rs"
 
 [[example]]
 name = "clusters-update"
-path = "api_examples/clusters/update.rs"
+path = "examples/api/clusters/update.rs"
 
 [[example]]
 name = "clusters-delete"
-path = "api_examples/clusters/delete.rs"
+path = "examples/api/clusters/delete.rs"
 
 [[example]]
 name = "cluster-tokens-list"
-path = "api_examples/cluster_tokens/list.rs"
+path = "examples/api/cluster_tokens/list.rs"
 
 [[example]]
 name = "cluster-tokens-get"
-path = "api_examples/cluster_tokens/get.rs"
+path = "examples/api/cluster_tokens/get.rs"
 
 [[example]]
 name = "cluster-tokens-create"
-path = "api_examples/cluster_tokens/create.rs"
+path = "examples/api/cluster_tokens/create.rs"
 
 [[example]]
 name = "cluster-tokens-update"
-path = "api_examples/cluster_tokens/update.rs"
+path = "examples/api/cluster_tokens/update.rs"
 
 [[example]]
 name = "cluster-tokens-delete"
-path = "api_examples/cluster_tokens/delete.rs"
+path = "examples/api/cluster_tokens/delete.rs"
 
 [[example]]
 name = "cluster-queues-list"
-path = "api_examples/cluster_queues/list.rs"
+path = "examples/api/cluster_queues/list.rs"
 
 [[example]]
 name = "cluster-queues-get"
-path = "api_examples/cluster_queues/get.rs"
+path = "examples/api/cluster_queues/get.rs"
 
 [[example]]
 name = "cluster-queues-create"
-path = "api_examples/cluster_queues/create.rs"
+path = "examples/api/cluster_queues/create.rs"
 
 [[example]]
 name = "cluster-queues-update"
-path = "api_examples/cluster_queues/update.rs"
+path = "examples/api/cluster_queues/update.rs"
 
 [[example]]
 name = "cluster-queues-delete"
-path = "api_examples/cluster_queues/delete.rs"
+path = "examples/api/cluster_queues/delete.rs"
 
 [[example]]
 name = "cluster-queues-pause"
-path = "api_examples/cluster_queues/pause.rs"
+path = "examples/api/cluster_queues/pause.rs"
 
 [[example]]
 name = "cluster-queues-resume"
-path = "api_examples/cluster_queues/resume.rs"
+path = "examples/api/cluster_queues/resume.rs"
 
 [[example]]
 name = "artifacts-list"
-path = "api_examples/artifacts/list.rs"
+path = "examples/api/artifacts/list.rs"
 
 [[example]]
 name = "artifacts-get"
-path = "api_examples/artifacts/get.rs"
+path = "examples/api/artifacts/get.rs"
 
 [[example]]
 name = "flaky_tests-list"
-path = "api_examples/flaky_tests/list.rs"
+path = "examples/api/flaky_tests/list.rs"
 
 [[example]]
 name = "rate_limits-get"
-path = "api_examples/rate_limits/get.rs"
+path = "examples/api/rate_limits/get.rs"
 
 [[example]]
 name = "tests-get"
-path = "api_examples/tests/get.rs"
+path = "examples/api/tests/get.rs"
 
 [[example]]
 name = "test_runs-get"
-path = "api_examples/test_runs/get.rs"
+path = "examples/api/test_runs/get.rs"
 
 [[example]]
 name = "test_runs-list"
-path = "api_examples/test_runs/list.rs"
+path = "examples/api/test_runs/list.rs"
 
 [[example]]
 name = "test_suites-list"
-path = "api_examples/test_suites/list.rs"
+path = "examples/api/test_suites/list.rs"
 
 [[example]]
 name = "test_suites-create"
-path = "api_examples/test_suites/create.rs"
+path = "examples/api/test_suites/create.rs"
 
 [[example]]
 name = "test_suites-get"
-path = "api_examples/test_suites/get.rs"
+path = "examples/api/test_suites/get.rs"
 
 [[example]]
 name = "test_suites-update"
-path = "api_examples/test_suites/update.rs"
+path = "examples/api/test_suites/update.rs"
 
 [[example]]
 name = "test_suites-delete"
-path = "api_examples/test_suites/delete.rs"
+path = "examples/api/test_suites/delete.rs"
 
 [[example]]
 name = "package-registries-list"
-path = "api_examples/package_registries/list.rs"
+path = "examples/api/package_registries/list.rs"
 
 [[example]]
 name = "package-registries-get"
-path = "api_examples/package_registries/get.rs"
+path = "examples/api/package_registries/get.rs"
 
 [[example]]
 name = "packages-get"
-path = "api_examples/packages/get.rs"
+path = "examples/api/packages/get.rs"
 
 [[example]]
 name = "pipeline-templates-list"
-path = "api_examples/pipeline_templates/list.rs"
+path = "examples/api/pipeline_templates/list.rs"
 
 [[example]]
 name = "pipeline-templates-get"
-path = "api_examples/pipeline_templates/get.rs"
+path = "examples/api/pipeline_templates/get.rs"
 
 [[example]]
 name = "packages-create"
-path = "api_examples/packages/create.rs"
+path = "examples/api/packages/create.rs"
 
 [[example]]
 name = "packages-create-presigned"
-path = "api_examples/packages/create_presigned_upload.rs"
+path = "examples/api/packages/create_presigned_upload.rs"
 
 [[example]]
-name = "dynamic-pipeline"
-path = "pipeline_examples/dynamic_pipeline.rs"
+name = "dynamic-pipeline-builder"
+path = "examples/pipeline/builder/dynamic_pipeline.rs"
+
+[[example]]
+name = "dynamic-pipeline-macro"
+path = "examples/pipeline/macro/dynamic_pipeline.rs"

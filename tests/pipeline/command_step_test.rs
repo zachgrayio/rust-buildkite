@@ -1,4 +1,3 @@
-
 use rust_buildkite::*;
 
 #[test]
@@ -8,7 +7,7 @@ fn test_command_step_with_command() {
         command: Some(CommandStepCommand::String(command)),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""command":"echo hello""#));
 }
@@ -20,19 +19,19 @@ fn test_command_step_with_label() {
         label: Some(label),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""label":"Test Label""#));
 }
 
 #[test]
 fn test_command_step_with_key() {
-    let key = Key("my-key".to_string());
+    let key: Key = "my-key".to_string().try_into().unwrap();
     let step = CommandStep {
         key: Some(key),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""key":"my-key""#));
 }
@@ -44,7 +43,7 @@ fn test_command_step_with_agents_list() {
         agents: Some(agents),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""agents":["agent1"]"#));
 }
@@ -55,7 +54,7 @@ fn test_command_step_with_concurrency() {
         concurrency: Some(5),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""concurrency":5"#));
 }
@@ -63,10 +62,10 @@ fn test_command_step_with_concurrency() {
 #[test]
 fn test_command_step_with_timeout() {
     let step = CommandStep {
-        timeout_in_minutes: Some(30),
+        timeout_in_minutes: Some(std::num::NonZeroU64::new(30).unwrap()),
         ..Default::default()
     };
-    
+
     let json = serde_json::to_string(&step).unwrap();
     assert!(json.contains(r#""timeout_in_minutes":30"#));
 }

@@ -206,7 +206,6 @@ impl BuildsService {
             if let Some(exclude_jobs) = options.exclude_jobs {
                 request = request.query(&[("exclude_jobs", exclude_jobs.to_string())]);
             }
-            // Add meta_data filters in the format meta_data[key]=value
             if let Some(ref meta_data) = options.meta_data {
                 for (key, value) in meta_data {
                     request = request.query(&[(format!("meta_data[{}]", key), value)]);
