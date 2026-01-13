@@ -233,3 +233,7 @@ path = "examples/pipeline/builder/dynamic_pipeline.rs"
 [[example]]
 name = "dynamic-pipeline-macro"
 path = "examples/pipeline/macro/dynamic_pipeline.rs"
+
+[[example]]
+name = "dynamic-pipeline-script"
+path = "examples/pipeline/script/dynamic_pipeline.rs"
