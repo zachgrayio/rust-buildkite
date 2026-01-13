@@ -21,8 +21,6 @@
 //! [dependencies]
 //! # When rust-buildkite is published to crates.io, use:
 //! # rust-buildkite = "0.1"
-//!
-//! # change this to a real version when published to crates.io
 //! rust-buildkite = { path = "../.." }
 //! serde_json = "1.0"
 //! serde_yaml = "0.9"
