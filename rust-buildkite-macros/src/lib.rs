@@ -4050,7 +4050,6 @@ impl CmdExpr {
             .filter(|d| {
                 (d.severity == Severity::Error || d.severity == Severity::Warning)
                 && d.code != "SC2154"
-                && d.code != "SC2086"
             })
             .collect();
         
