@@ -35,9 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See the [api_examples](api_examples/) directory for additional examples on usage of the API client, and [pipeline_examples](pipeline_examples/) for example usage of the Pipeline definition code generated from the Buildkite Json Schema.
+See the [api_examples](examples/api/) directory for additional examples on usage of the API client, and [pipeline_examples](examples/pipeline/) for example usage of the Pipeline definition code generated from the Buildkite Json Schema.
 
-## Complete example
+## Complete opinionated example
 ```rust
 #!/usr/bin/env rust-script
 
