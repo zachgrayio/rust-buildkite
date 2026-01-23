@@ -15,7 +15,7 @@ fn test_wait_step_with_continue_on_failure() {
     let step = WaitStep {
         allow_dependency_failure: None,
         branches: None,
-        continue_on_failure: WaitStepContinueOnFailure::Boolean(true),
+        continue_on_failure: true,
         depends_on: None,
         id: None,
         identifier: None,

@@ -10,7 +10,7 @@ fn test_agents_list() {
 
 #[test]
 fn test_allow_dependency_failure_boolean() {
-    let allow = AllowDependencyFailure::Boolean(true);
+    let allow = AllowDependencyFailure(true);
     let json = serde_json::to_value(&allow).unwrap();
     assert_eq!(json, json!(true));
 }
@@ -31,7 +31,7 @@ fn test_cache_string() {
 
 #[test]
 fn test_cancel_on_build_failing_boolean() {
-    let cancel = CancelOnBuildFailing::Boolean(true);
+    let cancel = CancelOnBuildFailing(true);
     let json = serde_json::to_value(&cancel).unwrap();
     assert_eq!(json, json!(true));
 }

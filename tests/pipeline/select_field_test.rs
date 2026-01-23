@@ -7,9 +7,9 @@ fn test_select_field() {
         default: None,
         hint: None,
         key: SelectFieldKey::from_str("environment").unwrap(),
-        multiple: SelectFieldMultiple::default(),
+        multiple: false,
         options: vec![],
-        required: SelectFieldRequired::default(),
+        required: true,
         select: None,
     };
 

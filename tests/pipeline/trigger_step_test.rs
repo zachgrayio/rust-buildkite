@@ -4,7 +4,7 @@ use rust_buildkite::*;
 fn test_trigger_step_with_trigger() {
     let step = TriggerStep {
         allow_dependency_failure: None,
-        async_: TriggerStepAsync::default(),
+        async_: false,
         branches: None,
         build: None,
         depends_on: None,
@@ -30,7 +30,7 @@ fn test_trigger_step_with_label() {
     let label = Label("Deploy".to_string());
     let step = TriggerStep {
         allow_dependency_failure: None,
-        async_: TriggerStepAsync::default(),
+        async_: false,
         branches: None,
         build: None,
         depends_on: None,

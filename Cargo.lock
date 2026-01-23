@@ -2494,7 +2494,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "typify"
 version = "0.5.0"
-source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#8ff50a85741d3bde5bf7ff9ca3fd00ad205370fe"
+source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#4aade3de84540f4165f46df31ad1bf06c8e30b87"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -2503,7 +2503,7 @@ dependencies = [
 [[package]]
 name = "typify-impl"
 version = "0.5.0"
-source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#8ff50a85741d3bde5bf7ff9ca3fd00ad205370fe"
+source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#4aade3de84540f4165f46df31ad1bf06c8e30b87"
 dependencies = [
  "heck",
  "log",
@@ -2522,7 +2522,7 @@ dependencies = [
 [[package]]
 name = "typify-macro"
 version = "0.5.0"
-source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#8ff50a85741d3bde5bf7ff9ca3fd00ad205370fe"
+source = "git+https://github.com/zachgrayio/typify?branch=mixed-types-and-refs#4aade3de84540f4165f46df31ad1bf06c8e30b87"
 dependencies = [
  "proc-macro2",
  "quote",

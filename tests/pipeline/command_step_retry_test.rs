@@ -3,7 +3,7 @@ use rust_buildkite::*;
 #[test]
 fn test_command_step_with_automatic_retry() {
     let retry = CommandStepRetry {
-        automatic: Some(CommandStepAutomaticRetry::Variant1(AutomaticRetry {
+        automatic: Some(CommandStepAutomaticRetry::AutomaticRetry(AutomaticRetry {
             exit_status: None,
             limit: Some(2),
             signal: None,

@@ -1997,7 +1997,7 @@ impl WaitStepDef {
     fn to_tokens_inner(&self) -> TokenStream2 {
         if self.continue_on_failure || self.if_condition.is_some() {
             let continue_on_failure_tokens = if self.continue_on_failure {
-                quote! { .continue_on_failure(::rust_buildkite::WaitStepContinueOnFailure::Boolean(true)) }
+                quote! { .continue_on_failure(true) }
             } else {
                 quote! {}
             };
@@ -2029,7 +2029,7 @@ impl WaitStepDef {
     fn to_group_step_tokens(&self) -> TokenStream2 {
         if self.continue_on_failure || self.if_condition.is_some() {
             let continue_on_failure_tokens = if self.continue_on_failure {
-                quote! { .continue_on_failure(::rust_buildkite::WaitStepContinueOnFailure::Boolean(true)) }
+                quote! { .continue_on_failure(true) }
             } else {
                 quote! {}
             };
@@ -2304,7 +2304,7 @@ impl FieldDef {
                     quote! {}
                 };
                 let required_tokens = if let Some(r) = f.required {
-                    quote! { .required(::rust_buildkite::TextFieldRequired::Boolean(#r)) }
+                    quote! { .required(#r) }
                 } else {
                     quote! {}
                 };
@@ -2345,7 +2345,7 @@ impl FieldDef {
                     quote! {}
                 };
                 let required_tokens = if let Some(r) = f.required {
-                    quote! { .required(::rust_buildkite::SelectFieldRequired::Boolean(#r)) }
+                    quote! { .required(#r) }
                 } else {
                     quote! {}
                 };
@@ -2355,7 +2355,7 @@ impl FieldDef {
                     quote! {}
                 };
                 let multiple_tokens = if let Some(m) = f.multiple {
-                    quote! { .multiple(::rust_buildkite::SelectFieldMultiple::Boolean(#m)) }
+                    quote! { .multiple(#m) }
                 } else {
                     quote! {}
                 };
@@ -2486,7 +2486,7 @@ impl CommandStepDef {
         };
 
         let soft_fail_tokens = if self.soft_fail {
-            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Variant0(::rust_buildkite::SoftFailVariant0::Boolean(true)))) }
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
         } else {
             quote! {}
         };
@@ -2684,7 +2684,7 @@ impl CommandStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -2757,7 +2757,7 @@ impl CommandStepDef {
         };
 
         let soft_fail_tokens = if self.soft_fail {
-            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Variant0(::rust_buildkite::SoftFailVariant0::Boolean(true)))) }
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
         } else {
             quote! {}
         };
@@ -2945,7 +2945,7 @@ impl CommandStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3107,7 +3107,7 @@ impl BlockStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3212,7 +3212,7 @@ impl BlockStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3362,7 +3362,7 @@ impl InputStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3467,7 +3467,7 @@ impl InputStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3578,7 +3578,7 @@ impl TriggerStepDef {
         };
 
         let async_tokens = if self.async_trigger {
-            quote! { .async_(::rust_buildkite::TriggerStepAsync::Boolean(true)) }
+            quote! { .async_(true) }
         } else {
             quote! {}
         };
@@ -3674,13 +3674,13 @@ impl TriggerStepDef {
         };
 
         let soft_fail_tokens = if self.soft_fail {
-            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Variant0(::rust_buildkite::SoftFailVariant0::Boolean(true)))) }
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
         } else {
             quote! {}
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3734,7 +3734,7 @@ impl TriggerStepDef {
         };
 
         let async_tokens = if self.async_trigger {
-            quote! { .async_(Some(::rust_buildkite::TriggerStepAsync::Boolean(true))) }
+            quote! { .async_(Some(true)) }
         } else {
             quote! {}
         };
@@ -3830,13 +3830,13 @@ impl TriggerStepDef {
         };
 
         let soft_fail_tokens = if self.soft_fail {
-            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Variant0(::rust_buildkite::SoftFailVariant0::Boolean(true)))) }
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
         } else {
             quote! {}
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };
@@ -3963,7 +3963,7 @@ impl GroupStepDef {
         };
 
         let allow_dependency_failure_tokens = if self.allow_dependency_failure {
-            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure::Boolean(true))) }
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
         } else {
             quote! {}
         };

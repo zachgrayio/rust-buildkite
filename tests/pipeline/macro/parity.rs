@@ -42,7 +42,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .cache(Some(Cache::Array(vec!["node_modules".to_string()])))
             .if_(Some(If("build.branch == 'main'".to_string())))
             .timeout_in_minutes(Some(std::num::NonZeroU64::new(30).unwrap()))
-            .soft_fail(Some(SoftFail::Variant0(SoftFailVariant0::Boolean(true))))
+            .soft_fail(Some(SoftFail::Boolean(true)))
             .parallelism(Some(4))
             .artifact_paths(Some(CommandStepArtifactPaths::Array(vec![
                 "coverage/**/*".to_string(),
@@ -50,7 +50,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .concurrency(Some(2))
             .concurrency_group(Some("test/main".to_string()))
             .priority(Some(Priority(5)))
-            .allow_dependency_failure(Some(AllowDependencyFailure::Boolean(true)))
+            .allow_dependency_failure(Some(AllowDependencyFailure(true)))
             .retry(Some(
                 CommandStepRetry::builder()
                     .automatic(Some(
@@ -78,7 +78,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
     );
     let wait_step = PipelineStepsItem::WaitStep(
         WaitStep::builder()
-            .continue_on_failure(WaitStepContinueOnFailure::Boolean(true))
+            .continue_on_failure(true)
             .if_(If("build.branch == 'main'".to_string()))
             .try_into()
             .expect("wait step"),
@@ -95,7 +95,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .branches(Some(Branches::Array(vec!["main".to_string()])))
             .if_(Some(If("build.branch == 'main'".to_string())))
             .prompt(Some(Prompt("Are you sure?".to_string())))
-            .allow_dependency_failure(Some(AllowDependencyFailure::Boolean(true)))
+            .allow_dependency_failure(Some(AllowDependencyFailure(true)))
             .try_into()
             .expect("block step"),
     );
@@ -111,7 +111,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .branches(Some(Branches::Array(vec!["main".to_string()])))
             .if_(Some(If("build.branch == 'main'".to_string())))
             .prompt(Some(Prompt("Fill in form".to_string())))
-            .allow_dependency_failure(Some(AllowDependencyFailure::Boolean(true)))
+            .allow_dependency_failure(Some(AllowDependencyFailure(true)))
             .try_into()
             .expect("input step"),
     );
@@ -135,7 +135,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .depends_on(Some(DependsOn::DependsOnList(DependsOnList(vec![
                 DependsOnListItem::String("config".to_string()),
             ]))))
-            .async_(TriggerStepAsync::Boolean(true))
+            .async_(true)
             .build(Some(
                 TriggerStepBuild::builder()
                     .branch("main".to_string())
@@ -149,8 +149,8 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .branches(Some(Branches::Array(vec!["main".to_string()])))
             .if_(Some(If("build.branch == 'main'".to_string())))
             .skip(Some(Skip::Boolean(false)))
-            .soft_fail(Some(SoftFail::Variant0(SoftFailVariant0::Boolean(true))))
-            .allow_dependency_failure(Some(AllowDependencyFailure::Boolean(true)))
+            .soft_fail(Some(SoftFail::Boolean(true)))
+            .allow_dependency_failure(Some(AllowDependencyFailure(true)))
             .try_into()
             .expect("trigger step"),
     );
@@ -178,7 +178,7 @@ fn build_pipeline_with_builder() -> JsonSchemaForBuildkitePipelineConfigurationF
             .notify(Some(BuildNotify(vec![
                 serde_json::from_value(serde_json::json!({ "slack": "#results" })).expect("notify"),
             ])))
-            .allow_dependency_failure(Some(AllowDependencyFailure::Boolean(true)))
+            .allow_dependency_failure(Some(AllowDependencyFailure(true)))
             .try_into()
             .expect("group step"),
     );

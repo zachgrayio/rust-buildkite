@@ -5,7 +5,7 @@ fn test_select_field_option() {
     let option = SelectFieldOption {
         hint: None,
         label: "Production".to_string(),
-        required: SelectFieldOptionRequired::default(),
+        required: true,
         value: "prod".to_string(),
     };
 

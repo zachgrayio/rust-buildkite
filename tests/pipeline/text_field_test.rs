@@ -8,7 +8,7 @@ fn test_text_field() {
         format: None,
         hint: Some("Enter your message".to_string()),
         key: TextFieldKey::from_str("message").unwrap(),
-        required: TextFieldRequired::default(),
+        required: true,
         text: None,
     };
 
