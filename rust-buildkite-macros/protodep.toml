@@ -1,0 +1,61 @@
+proto_outdir = "./proto"
+
+[[dependencies]]
+target = "github.com/bazelbuild/remote-apis"
+branch = "main"
+revision = "536ec595e1df0064bb37aecc95332a661b8c79b2"
+path = ""
+includes = [
+  "/build/bazel/remote/execution/v2/remote_execution.proto",
+  "/build/bazel/semver/semver.proto"
+]
+
+[[dependencies]]
+target = "github.com/bazelbuild/bazel"
+branch = "master"
+revision = "61be2d6010650299b361b53686d9935d4f562eed"
+path = ""
+includes = [
+  "/src/main/protobuf/command_line.proto",
+  "/src/main/protobuf/spawn.proto",
+  "/src/main/java/com/google/devtools/build/lib/buildeventstream/proto/build_event_stream.proto",
+  "/src/main/protobuf/action_cache.proto",
+  "/src/main/protobuf/option_filters.proto",
+  "/src/main/protobuf/failure_details.proto",
+  "/src/main/protobuf/invocation_policy.proto",
+  "/src/main/protobuf/strategy_policy.proto",
+  "/src/main/java/com/google/devtools/build/lib/packages/metrics/package_load_metrics.proto"
+]
+
+[[dependencies]]
+target = "github.com/googleapis/googleapis"
+branch = "master"
+revision = "1c153adc542b4c915eeab5290bc42581c821cc93"
+path = ""
+includes = [
+  "/google/bytestream/bytestream.proto",
+  "/google/longrunning/operations.proto",
+  "/google/rpc/status.proto",
+  "/google/api/annotations.proto",
+  "/google/api/client.proto",
+  "/google/api/http.proto",
+  "/google/api/launch_stage.proto",
+  "/google/api/field_behavior.proto",
+  "/google/devtools/build/v1/publish_build_event.proto",
+  "/google/devtools/build/v1/build_events.proto",
+  "/google/devtools/build/v1/build_status.proto"
+]
+
+[[dependencies]]
+target = "github.com/protocolbuffers/protobuf"
+branch = "main"
+revision = "v21.12"
+path = ""
+includes = [
+  "src/google/protobuf/any.proto",
+  "src/google/protobuf/descriptor.proto",
+  "src/google/protobuf/duration.proto",
+  "src/google/protobuf/empty.proto",
+  "src/google/protobuf/timestamp.proto",
+  "src/google/protobuf/wrappers.proto"
+]
