@@ -5,6 +5,22 @@
 //!
 //! Shell commands are validated using [bashrs](https://docs.rs/bashrs) for
 //! proper parsing and linting at compile time.
+//!
+//! Bazel commands (with the `bazel` feature) are validated using Bazel's
+//! Build Event Protocol (BEP) for target existence and verb-target
+//! compatibility checks.
+
+#[cfg(feature = "bazel")]
+mod bazel;
+
+#[cfg(feature = "bazel")]
+mod bep;
+
+#[cfg(feature = "bazel")]
+mod debug;
+
+#[cfg(feature = "bazel")]
+mod targets;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -450,6 +466,10 @@ struct PipelineDef {
     additional_commands: Vec<String>,
     allow_missing_paths: Vec<String>,
     runtime_env: Option<Vec<RuntimeEnvItem>>,
+    /// Custom Bazel verbs to allow (enables bazel_<verb> shorthand macros)
+    #[cfg(feature = "bazel")]
+    #[allow(dead_code)]
+    custom_verbs: Vec<String>,
     env: Option<Vec<(Ident, LitStr)>>,
     steps: Vec<StepDef>,
     agents: Vec<(String, String)>,
@@ -466,6 +486,8 @@ impl Parse for PipelineDef {
         let mut additional_commands = Vec::new();
         let mut allow_missing_paths = Vec::new();
         let mut runtime_env = None;
+        #[cfg(feature = "bazel")]
+        let mut custom_verbs = Vec::new();
         let mut env = None;
         let mut steps = Vec::new();
         let mut agents = Vec::new();
@@ -520,6 +542,18 @@ impl Parse for PipelineDef {
                         }
                     }
                     runtime_env = Some(vars);
+                }
+                #[cfg(feature = "bazel")]
+                "custom_verbs" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        let v: LitStr = content.parse()?;
+                        custom_verbs.push(v.value());
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
                 }
                 "allowed_commands" => {
                     let content;
@@ -626,9 +660,22 @@ impl Parse for PipelineDef {
                 "steps" => {
                     let content;
                     bracketed!(content in input);
-                    let step_list: Punctuated<StepDef, Token![,]> =
-                        Punctuated::parse_terminated(&content)?;
-                    steps = step_list.into_iter().collect();
+                    #[cfg(feature = "bazel")]
+                    {
+                        while !content.is_empty() {
+                            let step = StepDef::parse_with_custom_verbs(&content, &custom_verbs)?;
+                            steps.push(step);
+                            if content.peek(Token![,]) {
+                                content.parse::<Token![,]>()?;
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "bazel"))]
+                    {
+                        let step_list: Punctuated<StepDef, Token![,]> =
+                            Punctuated::parse_terminated(&content)?;
+                        steps = step_list.into_iter().collect();
+                    }
                 }
                 "agents" => {
                     let content;
@@ -719,6 +766,8 @@ impl Parse for PipelineDef {
             additional_commands,
             allow_missing_paths,
             runtime_env,
+            #[cfg(feature = "bazel")]
+            custom_verbs,
             env,
             steps,
             agents,
@@ -1039,6 +1088,118 @@ enum StepDef {
 
 impl Parse for StepDef {
     fn parse(input: ParseStream) -> Result<Self> {
+        Self::parse_with_custom_verbs(input, &[])
+    }
+}
+
+impl StepDef {
+    #[cfg(feature = "bazel")]
+    fn parse_with_custom_verbs(input: ParseStream, custom_verbs: &[String]) -> Result<Self> {
+        let ident: Ident = input.parse()?;
+        let ident_str = ident.to_string();
+
+        match ident_str.as_str() {
+            "command" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_command_object_literal(input)
+                } else if input.peek(syn::token::Paren) {
+                    Self::parse_command_fluent(input)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        "expected '(' or '{' after 'command'",
+                    ))
+                }
+            }
+            "wait" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_wait_object_literal(input)
+                } else {
+                    Ok(StepDef::Wait(WaitStepDef::default()))
+                }
+            }
+            "block" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_block_object_literal(input)
+                } else if input.peek(syn::token::Paren) {
+                    Self::parse_block_fluent(input)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        "expected '(' or '{' after 'block'",
+                    ))
+                }
+            }
+            "input" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_input_object_literal(input)
+                } else if input.peek(syn::token::Paren) {
+                    Self::parse_input_fluent(input)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        "expected '(' or '{' after 'input'",
+                    ))
+                }
+            }
+            "trigger" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_trigger_object_literal(input)
+                } else if input.peek(syn::token::Paren) {
+                    Self::parse_trigger_fluent(input)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        "expected '(' or '{' after 'trigger'",
+                    ))
+                }
+            }
+            "group" => {
+                if input.peek(syn::token::Brace) {
+                    Self::parse_group_object_literal(input)
+                } else if input.peek(syn::token::Paren) {
+                    Self::parse_group_fluent(input)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        "expected '(' or '{' after 'group'",
+                    ))
+                }
+            }
+            "bazel_command" => Self::parse_bazel_command_step(input, None, ident.span(), custom_verbs),
+            "bazel_build" => Self::parse_bazel_command_step(input, Some("build"), ident.span(), custom_verbs),
+            "bazel_test" => Self::parse_bazel_command_step(input, Some("test"), ident.span(), custom_verbs),
+            "bazel_run" => Self::parse_bazel_command_step(input, Some("run"), ident.span(), custom_verbs),
+            "bazel_query" => Self::parse_bazel_command_step(input, Some("query"), ident.span(), custom_verbs),
+            "bazel_cquery" => Self::parse_bazel_command_step(input, Some("cquery"), ident.span(), custom_verbs),
+            "bazel_aquery" => Self::parse_bazel_command_step(input, Some("aquery"), ident.span(), custom_verbs),
+            "bazel_coverage" => Self::parse_bazel_command_step(input, Some("coverage"), ident.span(), custom_verbs),
+            other if other.starts_with("bazel_") => {
+                let verb = other.strip_prefix("bazel_").unwrap();
+                if custom_verbs.iter().any(|v| v == verb) {
+                    Self::parse_bazel_command_step(input, Some(verb), ident.span(), custom_verbs)
+                } else {
+                    Err(Error::new(
+                        ident.span(),
+                        format!(
+                            "Unknown bazel verb '{}'. Add it to custom_verbs: [\"{}\"]",
+                            verb, verb
+                        ),
+                    ))
+                }
+            }
+            other => Err(Error::new(
+                ident.span(),
+                format!(
+                    "unknown step type: '{}'. Expected: command, wait, block, input, trigger, group, bazel_command, bazel_build, bazel_test, bazel_run",
+                    other
+                ),
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "bazel"))]
+    fn parse_with_custom_verbs(input: ParseStream, _custom_verbs: &[String]) -> Result<Self> {
         let ident: Ident = input.parse()?;
         let ident_str = ident.to_string();
 
@@ -1119,9 +1280,7 @@ impl Parse for StepDef {
             )),
         }
     }
-}
 
-impl StepDef {
     fn get_key(&self) -> Option<(String, proc_macro2::Span)> {
         match self {
             StepDef::Command(c) => c.key.clone(),
@@ -1151,7 +1310,7 @@ impl StepDef {
         syn::parenthesized!(content in input);
         let mut step = if content.peek(Ident) {
             let ident: Ident = content.parse()?;
-            if ident == "cmd" {
+            if ident == "cmd" || ident == "bazel" {
                 content.parse::<Token![!]>()?;
                 let cmd_content;
                 syn::parenthesized!(cmd_content in content);
@@ -1161,12 +1320,27 @@ impl StepDef {
                         "cmd! requires a string literal, e.g., cmd!(\"npm install\")"
                     )
                 })?;
-                let cmd_expr = CmdExpr::from_lit_str(&lit)?;
-                CommandStepDef::new_with_cmd(cmd_expr)
+                if ident == "cmd" {
+                    let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                    CommandStepDef::new_with_cmd(cmd_expr)
+                } else {
+                    #[cfg(feature = "bazel")]
+                    {
+                        let bazel_expr = BazelExpr::from_lit_str(&lit, false, false, &[])?;
+                        CommandStepDef::new_with_bazel(bazel_expr)
+                    }
+                    #[cfg(not(feature = "bazel"))]
+                    {
+                        return Err(Error::new(
+                            ident.span(),
+                            "bazel! requires the 'bazel' feature. Add `features = [\"bazel\"]` to your dependency."
+                        ));
+                    }
+                }
             } else {
                 return Err(Error::new(
                     ident.span(),
-                    format!("expected cmd!(\"...\"), got '{}'", ident),
+                    format!("expected cmd!(\"...\") or bazel!(\"...\"), got '{}'", ident),
                 ));
             }
         } else if content.peek(LitStr) {
@@ -1347,7 +1521,7 @@ impl StepDef {
                 "command" => {
                     if content.peek(Ident) {
                         let ident: Ident = content.parse()?;
-                        if ident == "cmd" {
+                        if ident == "cmd" || ident == "bazel" {
                             content.parse::<Token![!]>()?;
                             let cmd_content;
                             syn::parenthesized!(cmd_content in content);
@@ -1357,12 +1531,27 @@ impl StepDef {
                                     "cmd! requires a string literal, e.g., cmd!(\"npm install\")"
                                 )
                             })?;
-                            let cmd_expr = CmdExpr::from_lit_str(&lit)?;
-                            step.command = Some(CommandValue::new(cmd_expr));
+                            if ident == "cmd" {
+                                let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                                step.command = Some(CommandValue::from_cmd(cmd_expr));
+                            } else {
+                                #[cfg(feature = "bazel")]
+                                {
+                                    let bazel_expr = BazelExpr::from_lit_str(&lit, false, false, &[])?;
+                                    step.command = Some(CommandValue::from_bazel(bazel_expr));
+                                }
+                                #[cfg(not(feature = "bazel"))]
+                                {
+                                    return Err(Error::new(
+                                        ident.span(),
+                                        "bazel! requires the 'bazel' feature. Add `features = [\"bazel\"]` to your dependency."
+                                    ));
+                                }
+                            }
                         } else {
                             return Err(Error::new(
                                 ident.span(),
-                                format!("expected cmd!(\"...\"), got '{}'", ident),
+                                format!("expected cmd!(\"...\") or bazel!(\"...\"), got '{}'", ident),
                             ));
                         }
                     } else if content.peek(LitStr) {
@@ -1554,6 +1743,257 @@ impl StepDef {
                 "command step requires 'command' field",
             ));
         }
+
+        Ok(StepDef::Command(step))
+    }
+
+    #[cfg(feature = "bazel")]
+    fn validate_target_patterns(pattern: &str) -> std::result::Result<(), String> {
+        for part in pattern.split_whitespace() {
+            let is_valid = part.starts_with("//")
+                || part.starts_with("@")
+                || part.starts_with(':')
+                || part.starts_with("-//")
+                || part.starts_with("-@")
+                || part.starts_with("-:")
+                || part == "...";
+
+            if !is_valid {
+                if part.starts_with('-') {
+                    return Err(format!(
+                        "Invalid target pattern '{}': flags belong in flags:, not target_patterns:",
+                        part
+                    ));
+                }
+                return Err(format!("Invalid target pattern: '{}'", part));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "bazel")]
+    fn parse_bazel_command_step(
+        input: ParseStream,
+        fixed_verb: Option<&str>,
+        step_span: proc_macro2::Span,
+        pipeline_custom_verbs: &[String],
+    ) -> Result<Self> {
+        let content;
+        braced!(content in input);
+
+        let mut step = CommandStepDef::new_empty();
+        let mut verb: Option<String> = fixed_verb.map(|s| s.to_string());
+        let mut target_patterns: Option<String> = None;
+        let mut extra_args: Vec<String> = Vec::new();
+        let mut validate_targets = true;
+        let mut dry_run = false;
+        let mut step_custom_verbs: Vec<String> = Vec::new();
+
+        while !content.is_empty() {
+            let field: Ident = content.parse()?;
+            content.parse::<Token![:]>()?;
+
+            match strip_raw_ident(&field.to_string()) {
+                "verb" => {
+                    if fixed_verb.is_some() {
+                        return Err(Error::new(
+                            field.span(),
+                            "verb cannot be specified when using bazel_build, bazel_test, etc.",
+                        ));
+                    }
+                    let v: LitStr = content.parse()?;
+                    verb = Some(v.value());
+                }
+                "target_patterns" => {
+                    let t: LitStr = content.parse()?;
+                    let val = t.value();
+                    if let Err(e) = Self::validate_target_patterns(&val) {
+                        return Err(Error::new(t.span(), e));
+                    }
+                    target_patterns = Some(val);
+                }
+                "flags" => {
+                    if content.peek(syn::token::Bracket) {
+                        let flags_content;
+                        bracketed!(flags_content in content);
+                        while !flags_content.is_empty() {
+                            let flag: LitStr = flags_content.parse()?;
+                            extra_args.push(flag.value());
+                            if flags_content.peek(Token![,]) {
+                                flags_content.parse::<Token![,]>()?;
+                            }
+                        }
+                    } else {
+                        let flags_str: LitStr = content.parse()?;
+                        for flag in flags_str.value().split_whitespace() {
+                            extra_args.push(flag.to_string());
+                        }
+                    }
+                }
+                "validate_targets" => {
+                    let val: syn::LitBool = content.parse()?;
+                    validate_targets = val.value();
+                }
+                "dry_run" => {
+                    let val: syn::LitBool = content.parse()?;
+                    dry_run = val.value();
+                }
+                "custom_verbs" => {
+                    let verbs_content;
+                    bracketed!(verbs_content in content);
+                    while !verbs_content.is_empty() {
+                        let v: LitStr = verbs_content.parse()?;
+                        step_custom_verbs.push(v.value());
+                        if verbs_content.peek(Token![,]) {
+                            verbs_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "label" => {
+                    step.label = Some(content.parse()?);
+                }
+                "key" => {
+                    let key_lit: LitStr = content.parse()?;
+                    step.key = Some((key_lit.value(), key_lit.span()));
+                }
+                "env" => {
+                    let env_content;
+                    braced!(env_content in content);
+                    while !env_content.is_empty() {
+                        let var_name: Ident = env_content.parse()?;
+                        env_content.parse::<Token![:]>()?;
+                        let var_value: LitStr = env_content.parse()?;
+                        step.env.push((var_name.to_string(), var_value));
+                        if env_content.peek(Token![,]) {
+                            env_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "depends_on" => {
+                    let deps_content;
+                    bracketed!(deps_content in content);
+                    while !deps_content.is_empty() {
+                        let dep: LitStr = deps_content.parse()?;
+                        step.depends_on.push((dep.value(), dep.span()));
+                        if deps_content.peek(Token![,]) {
+                            deps_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "timeout_in_minutes" => {
+                    let timeout: syn::LitInt = content.parse()?;
+                    step.timeout_in_minutes = Some(timeout);
+                }
+                "soft_fail" => {
+                    let val: syn::LitBool = content.parse()?;
+                    step.soft_fail = val.value();
+                }
+                "parallelism" => {
+                    let p: syn::LitInt = content.parse()?;
+                    step.parallelism = Some(p);
+                }
+                "artifact_paths" => {
+                    let paths_content;
+                    bracketed!(paths_content in content);
+                    while !paths_content.is_empty() {
+                        let path: LitStr = paths_content.parse()?;
+                        step.artifact_paths.push(path);
+                        if paths_content.peek(Token![,]) {
+                            paths_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "agents" => {
+                    let agents_content;
+                    braced!(agents_content in content);
+                    while !agents_content.is_empty() {
+                        let agent_key: Ident = agents_content.parse()?;
+                        agents_content.parse::<Token![:]>()?;
+                        let agent_value: LitStr = agents_content.parse()?;
+                        step.agents.push((agent_key.to_string(), agent_value));
+                        if agents_content.peek(Token![,]) {
+                            agents_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "branches" => {
+                    let branches_content;
+                    bracketed!(branches_content in content);
+                    while !branches_content.is_empty() {
+                        let branch: LitStr = branches_content.parse()?;
+                        step.branches.push(branch);
+                        if branches_content.peek(Token![,]) {
+                            branches_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "condition" | "if" => {
+                    let condition: LitStr = content.parse()?;
+                    step.if_condition = Some(condition);
+                }
+                "retry" => {
+                    let retry_value = NestedValue::parse(&content)?;
+                    if let NestedValue::Object(pairs) = retry_value {
+                        let mut config = RetryConfig::default();
+                        for (k, v) in pairs {
+                            match k.as_str() {
+                                "automatic" => config.automatic = Some(v),
+                                "manual" => config.manual = Some(v),
+                                _ => {}
+                            }
+                        }
+                        step.retry = Some(config);
+                    }
+                }
+                "skip" => {
+                    if content.peek(syn::LitBool) {
+                        let val: syn::LitBool = content.parse()?;
+                        step.skip = Some(SkipValue::Bool(val.value()));
+                    } else {
+                        let reason: LitStr = content.parse()?;
+                        step.skip = Some(SkipValue::Reason(reason.value()));
+                    }
+                }
+                "allow_dependency_failure" => {
+                    let val: syn::LitBool = content.parse()?;
+                    step.allow_dependency_failure = val.value();
+                }
+                other => {
+                    return Err(Error::new(
+                        field.span(),
+                        format!("unknown bazel step field: {}", other),
+                    ));
+                }
+            }
+            if content.peek(Token![,]) {
+                content.parse::<Token![,]>()?;
+            }
+        }
+
+        let verb = verb.ok_or_else(|| {
+            Error::new(step_span, "bazel_command requires 'verb' field")
+        })?;
+        let target = target_patterns.ok_or_else(|| {
+            Error::new(step_span, "bazel step requires 'target_patterns' field")
+        })?;
+
+        let has_subtraction = target.split_whitespace().any(|p| {
+            p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
+        });
+
+        let mut cmd_parts = vec![verb.clone()];
+        cmd_parts.extend(extra_args);
+        if has_subtraction {
+            cmd_parts.push("--".to_string());
+        }
+        cmd_parts.push(target);
+        let bazel_cmd = cmd_parts.join(" ");
+
+        let lit = LitStr::new(&bazel_cmd, step_span);
+        let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
+        all_custom_verbs.extend(step_custom_verbs);
+        let bazel_expr = BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
+        step.command = Some(CommandValue::from_bazel(bazel_expr));
 
         Ok(StepDef::Command(step))
     }
@@ -2471,35 +2911,86 @@ impl WaitStepDef {
         }
     }
 }
-/// Represents a validated command via cmd!("...")
-/// All commands must use cmd!() for bashrs validation - raw strings are rejected.
+/// Source of a command - either a shell command (cmd!) or bazel command (bazel!)
 #[derive(Clone)]
-struct CommandValue(CmdExpr);
+enum CommandSource {
+    /// Shell command via cmd!("...")
+    Shell(CmdExpr),
+    /// Bazel command via bazel!("...") - requires "bazel" feature
+    #[cfg(feature = "bazel")]
+    Bazel(BazelExpr),
+}
+
+/// Represents a validated command via cmd!("...") or bazel!("...")
+/// All commands must use macros for validation - raw strings are rejected.
+#[derive(Clone)]
+struct CommandValue(CommandSource);
 
 impl CommandValue {
-    fn new(cmd: CmdExpr) -> Self {
-        Self(cmd)
+    fn from_cmd(cmd: CmdExpr) -> Self {
+        Self(CommandSource::Shell(cmd))
     }
-    
+
+    #[cfg(feature = "bazel")]
+    fn from_bazel(bazel: BazelExpr) -> Self {
+        Self(CommandSource::Bazel(bazel))
+    }
+
     /// Get the command string value
     fn get_command_string(&self) -> String {
-        self.0.command.clone()
+        match &self.0 {
+            CommandSource::Shell(cmd) => cmd.command.clone(),
+            #[cfg(feature = "bazel")]
+            CommandSource::Bazel(bazel) => format!("bazel {}", bazel.command),
+        }
     }
-    
+
     /// Get the command name for allowlist validation
     fn get_command_name(&self) -> String {
-        self.0.command_name.clone()
+        match &self.0 {
+            CommandSource::Shell(cmd) => cmd.command_name.clone(),
+            #[cfg(feature = "bazel")]
+            CommandSource::Bazel(_) => "bazel".to_string(),
+        }
     }
-    
+
     /// Get undefined vars flagged by bashrs (SC2154)
     /// These are vars that aren't defined inline in the script
     fn get_undefined_vars(&self) -> &[String] {
-        &self.0.undefined_vars
+        match &self.0 {
+            CommandSource::Shell(cmd) => &cmd.undefined_vars,
+            #[cfg(feature = "bazel")]
+            CommandSource::Bazel(bazel) => &bazel.undefined_vars,
+        }
     }
-    
+
     /// Get span for error reporting
     fn span(&self) -> proc_macro2::Span {
-        self.0.span
+        match &self.0 {
+            CommandSource::Shell(cmd) => cmd.span,
+            #[cfg(feature = "bazel")]
+            CommandSource::Bazel(bazel) => bazel.span,
+        }
+    }
+
+    /// Check if this is a bazel command
+    #[allow(dead_code)]
+    fn is_bazel(&self) -> bool {
+        match &self.0 {
+            CommandSource::Shell(_) => false,
+            #[cfg(feature = "bazel")]
+            CommandSource::Bazel(_) => true,
+        }
+    }
+
+    /// Get the bazel verb if this is a bazel command
+    #[cfg(feature = "bazel")]
+    #[allow(dead_code)]
+    fn bazel_verb(&self) -> Option<&str> {
+        match &self.0 {
+            CommandSource::Shell(_) => None,
+            CommandSource::Bazel(bazel) => Some(&bazel.verb),
+        }
     }
 }
 
@@ -2805,7 +3296,35 @@ impl FieldDef {
 impl CommandStepDef {
     fn new_with_cmd(cmd_expr: CmdExpr) -> Self {
         Self {
-            command: Some(CommandValue::new(cmd_expr)),
+            command: Some(CommandValue::from_cmd(cmd_expr)),
+            label: None,
+            key: None,
+            depends_on: Vec::new(),
+            env: Vec::new(),
+            timeout_in_minutes: None,
+            soft_fail: false,
+            parallelism: None,
+            artifact_paths: Vec::new(),
+            agents: Vec::new(),
+            branches: Vec::new(),
+            if_condition: None,
+            cache: Vec::new(),
+            retry: None,
+            plugins: Vec::new(),
+            notify: Vec::new(),
+            matrix: None,
+            concurrency: None,
+            concurrency_group: None,
+            skip: None,
+            priority: None,
+            allow_dependency_failure: false,
+        }
+    }
+
+    #[cfg(feature = "bazel")]
+    fn new_with_bazel(bazel_expr: BazelExpr) -> Self {
+        Self {
+            command: Some(CommandValue::from_bazel(bazel_expr)),
             label: None,
             key: None,
             depends_on: Vec::new(),
@@ -5103,7 +5622,7 @@ impl CmdExpr {
             span,
         })
     }
-    
+
     /// Validate the command string using bashrs linter.
     /// Returns Ok with list of undefined vars (SC2154), or Err for other issues.
     /// Undefined vars are passed to pipeline-level validation against env/runtime_env.
@@ -5235,5 +5754,466 @@ pub fn cmd(input: TokenStream) -> TokenStream {
     match CmdExpr::from_lit_str(&lit) {
         Ok(cmd_expr) => cmd_expr.to_tokens().into(),
         Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// A macro for defining Bazel commands with compile-time validation.
+///
+/// This macro accepts a **string literal** containing a Bazel command.
+/// At compile time, bashrs parses and lints the command for errors.
+///
+/// # Example
+///
+/// ```ignore
+/// use rust_buildkite::bazel;
+///
+/// // Simple command
+/// let c = bazel!("info");
+///
+/// // Complex command with operators
+/// let c = bazel!("test //...");
+///
+/// // With Rust format interpolation
+/// let target = "//cpp:hello-world";
+/// let c = bazel!(&format!("build {}", target));
+/// ```
+#[cfg(feature = "bazel")]
+#[proc_macro]
+pub fn bazel(input: TokenStream) -> TokenStream {
+    let parsed = match syn::parse::<BazelMacroInput>(input) {
+        Ok(p) => p,
+        Err(_) => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "bazel! requires a string literal, e.g., bazel!(\"test //...\")"
+            )
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    match BazelExpr::from_lit_str(&parsed.command, parsed.validate_targets, parsed.dry_run, &parsed.custom_verbs) {
+        Ok(bazel_expr) => bazel_expr.to_tokens().into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[cfg(feature = "bazel")]
+struct BazelMacroInput {
+    command: LitStr,
+    validate_targets: bool,
+    dry_run: bool,
+    custom_verbs: Vec<String>,
+}
+
+#[cfg(feature = "bazel")]
+impl Parse for BazelMacroInput {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let command: LitStr = input.parse()?;
+        let mut validate_targets = true;
+        let mut dry_run = false;
+        let mut custom_verbs = Vec::new();
+
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "validate_targets" => {
+                    let value: syn::LitBool = input.parse()?;
+                    validate_targets = value.value();
+                }
+                "dry_run" => {
+                    let value: syn::LitBool = input.parse()?;
+                    dry_run = value.value();
+                }
+                "custom_verbs" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        let v: LitStr = content.parse()?;
+                        custom_verbs.push(v.value());
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                _ => {
+                    return Err(Error::new(
+                        key.span(),
+                        "expected 'validate_targets', 'dry_run', or 'custom_verbs'",
+                    ));
+                }
+            }
+        }
+
+        Ok(BazelMacroInput {
+            command,
+            validate_targets,
+            dry_run,
+            custom_verbs,
+        })
+    }
+}
+
+/// Valid Bazel verbs/commands
+#[cfg(feature = "bazel")]
+const VALID_BAZEL_VERBS: &[&str] = &[
+    "build", "test", "run", "query", "cquery", "aquery",
+    "info", "version", "clean", "shutdown", "fetch", "sync",
+    "coverage", "mobile-install", "print_action",
+];
+
+/// Represents a parsed Bazel command with compile-time validation.
+#[cfg(feature = "bazel")]
+#[derive(Clone)]
+struct BazelExpr {
+    /// The full command string (without "bazel" prefix)
+    command: String,
+    /// The verb (build, test, run, etc.)
+    verb: String,
+    /// Undefined shell variables found in the command
+    undefined_vars: Vec<String>,
+    /// Source span for error reporting
+    span: proc_macro2::Span,
+}
+
+#[cfg(feature = "bazel")]
+impl BazelExpr {
+    fn quote_flag_values(command: &str) -> String {
+        let mut result = String::with_capacity(command.len() + 32);
+        let mut chars = command.chars().peekable();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+
+        while let Some(c) = chars.next() {
+            match c {
+                '\'' if !in_double_quote => {
+                    in_single_quote = !in_single_quote;
+                    result.push(c);
+                }
+                '"' if !in_single_quote => {
+                    in_double_quote = !in_double_quote;
+                    result.push(c);
+                }
+                '=' if !in_single_quote && !in_double_quote => {
+                    result.push(c);
+                    let is_flag = {
+                        let trimmed = result.trim_end_matches('=');
+                        if let Some(last_space) = trimmed.rfind(' ') {
+                            let flag_part = &trimmed[last_space + 1..];
+                            flag_part.starts_with('-')
+                        } else {
+                            trimmed.starts_with('-')
+                        }
+                    };
+
+                    if is_flag {
+                        match chars.peek() {
+                            None | Some(' ') => {
+                                result.push_str("''");
+                            }
+                            Some('\'') | Some('"') => {
+                            }
+                            Some('$') => {
+                            }
+                            Some(_) => {
+                                let mut value = String::new();
+                                while let Some(&ch) = chars.peek() {
+                                    if ch == ' ' || ch == '\'' || ch == '"' {
+                                        break;
+                                    }
+                                    value.push(chars.next().unwrap());
+                                }
+                                result.push('\'');
+                                result.push_str(&value);
+                                result.push('\'');
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    result.push(c);
+                }
+            }
+        }
+        result
+    }
+
+    fn from_lit_str(
+        lit: &LitStr,
+        validate_targets: bool,
+        dry_run: bool,
+        custom_verbs: &[String],
+    ) -> Result<Self> {
+        let command = lit.value();
+        let span = lit.span();
+
+        let full_command = format!("bazel {}", command);
+        let quoted_command = Self::quote_flag_values(&full_command);
+        let undefined_vars = match CmdExpr::validate_with_bashrs(&quoted_command) {
+            Ok(vars) => vars,
+            Err(e) => return Err(Error::new(span, e)),
+        };
+
+        let verb = Self::extract_verb(&command);
+        if verb.is_empty() {
+            return Err(Error::new(span, "bazel! command is empty"));
+        }
+        if !Self::is_valid_verb(&verb, custom_verbs) {
+            let mut all_verbs: Vec<&str> = VALID_BAZEL_VERBS.to_vec();
+            all_verbs.extend(custom_verbs.iter().map(|s| s.as_str()));
+            return Err(Error::new(
+                span,
+                format!(
+                    "Unknown bazel command '{}'. Valid commands: {}",
+                    verb,
+                    all_verbs.join(", ")
+                ),
+            ));
+        }
+
+        if undefined_vars.is_empty()
+            && !matches!(
+                verb.as_str(),
+                "info" | "version" | "clean" | "shutdown" | "help"
+            )
+        {
+            if let Ok((workspace, script_dir)) = bazel::find_bazel_workspace_and_script_dir() {
+                let current_pkg = targets::get_current_package(&workspace, &script_dir);
+                let args: Vec<&str> = command.trim().split_whitespace().skip(1).collect();
+
+                match bazel::fast_validate_targets(&args, &workspace, current_pkg.as_deref()) {
+                    Ok(()) => {}
+                    Err(fast_err) => {
+                        if validate_targets {
+                            if let Err(query_err) = bazel::validate_with_query(
+                                &verb,
+                                &args,
+                                &workspace,
+                                current_pkg.as_deref(),
+                            ) {
+                                return Err(Error::new(
+                                    span,
+                                    format!("Target validation failed: {}", query_err),
+                                ));
+                            }
+                        } else {
+                            return Err(Error::new(
+                                span,
+                                format!("Target validation failed: {}", fast_err),
+                            ));
+                        }
+                    }
+                }
+
+                if let Err(e) = bazel::canonicalize_flags(&verb, &args, &workspace) {
+                    return Err(Error::new(span, e));
+                }
+
+                if dry_run {
+                    if let Err(e) = Self::run_dry_run(&verb, &command, span) {
+                        let err_msg = e.to_string();
+                        if !err_msg.contains("Could not find bazel workspace") {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(BazelExpr {
+            command,
+            verb,
+            undefined_vars,
+            span,
+        })
+    }
+
+    fn is_valid_verb(verb: &str, custom_verbs: &[String]) -> bool {
+        VALID_BAZEL_VERBS.contains(&verb) || custom_verbs.iter().any(|v| v == verb)
+    }
+
+    /// Run bazel with --nobuild to perform analysis phase without building.
+    fn run_dry_run(verb: &str, command: &str, span: proc_macro2::Span) -> Result<()> {
+        if matches!(verb, "info" | "version" | "clean" | "shutdown" | "help") {
+            return Ok(());
+        }
+
+        let workspace = Self::find_workspace_for_span(span)?;
+
+        let args: Vec<&str> = command
+            .trim()
+            .split_whitespace()
+            .skip(1)
+            .collect();
+
+        let result = match bep::dry_run(verb, &args, &workspace) {
+            Ok(r) => r,
+            Err(e) => return Err(Error::new(span, format!("Dry run failed:\n{}", e))),
+        };
+
+        match verb {
+            "run" => {
+                if result.target_kinds.len() != 1 {
+                    return Err(Error::new(
+                        span,
+                        format!(
+                            "bazel run requires exactly one target, found {}",
+                            result.target_kinds.len()
+                        ),
+                    ));
+                }
+                for (target, kind) in &result.target_kinds {
+                    if let Err(e) = bazel::validate_verb_target_compatibility(verb, target, kind) {
+                        return Err(Error::new(span, e));
+                    }
+                }
+            }
+            "test" => {
+                let has_test_target = result.target_kinds.values().any(|k| k.contains("_test"));
+                if !has_test_target && !result.target_kinds.is_empty() {
+                    let targets: Vec<_> = result.target_kinds.keys().collect();
+                    return Err(Error::new(
+                        span,
+                        format!(
+                            "No test targets found. Targets {:?} are not test targets.",
+                            targets
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Find bazel workspace from environment variables.
+    /// Uses RUST_SCRIPT_BASE_PATH (for rust-script) or CARGO_MANIFEST_DIR.
+    fn find_workspace_for_span(span: proc_macro2::Span) -> Result<std::path::PathBuf> {
+        bazel::find_bazel_workspace_from_env()
+            .map_err(|e| Error::new(span, format!("Bazel validation failed: {}", e)))
+    }
+
+    fn extract_verb(command: &str) -> String {
+        command
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Check if this command has undefined variables that would require
+    /// runtime resolution (can't validate via BEP).
+    #[allow(dead_code)]
+    fn has_undefined_vars(&self) -> bool {
+        !self.undefined_vars.is_empty()
+    }
+
+    fn to_tokens(&self) -> TokenStream2 {
+        let cmd = format!("bazel {}", &self.command);
+        quote! { #cmd.to_string() }
+    }
+}
+
+#[cfg(all(test, feature = "bazel"))]
+mod quote_flag_values_tests {
+    use super::BazelExpr;
+    use bashrs::linter::{lint_shell, Severity};
+
+    fn has_lint_issues(cmd: &str) -> bool {
+        let script = format!("#!/bin/bash\n{}", cmd);
+        let result = lint_shell(&script);
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error || d.severity == Severity::Warning)
+    }
+
+    #[test]
+    fn quotes_unquoted_flag_values() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config=local //..."),
+            "bazel test --config='local' //..."
+        );
+    }
+
+    #[test]
+    fn preserves_single_quoted_values() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config='local' //..."),
+            "bazel test --config='local' //..."
+        );
+    }
+
+    #[test]
+    fn preserves_double_quoted_values() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config=\"local\" //..."),
+            "bazel test --config=\"local\" //..."
+        );
+    }
+
+    #[test]
+    fn quotes_empty_flag_values() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config= //..."),
+            "bazel test --config='' //..."
+        );
+    }
+
+    #[test]
+    fn preserves_variable_references() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config=$VAR //..."),
+            "bazel test --config=$VAR //..."
+        );
+    }
+
+    #[test]
+    fn preserves_quoted_variable_references() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --config=\"$VAR\" //..."),
+            "bazel test --config=\"$VAR\" //..."
+        );
+    }
+
+    #[test]
+    fn quotes_multiple_flags() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test --jobs=4 --config=local //..."),
+            "bazel test --jobs='4' --config='local' //..."
+        );
+    }
+
+    #[test]
+    fn no_change_without_flags() {
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel build //..."),
+            "bazel build //..."
+        );
+        assert_eq!(
+            BazelExpr::quote_flag_values("bazel test //foo:bar"),
+            "bazel test //foo:bar"
+        );
+    }
+
+    #[test]
+    fn quoted_local_passes_bashrs() {
+        let cmd = "bazel test --config=local //...";
+        let quoted = BazelExpr::quote_flag_values(cmd);
+        assert!(!has_lint_issues(&quoted), "quoted command should pass bashrs: {}", quoted);
+    }
+
+    #[test]
+    fn quoted_multiple_flags_passes_bashrs() {
+        let cmd = "bazel test --jobs=4 --config=local //...";
+        let quoted = BazelExpr::quote_flag_values(cmd);
+        assert!(!has_lint_issues(&quoted), "quoted command should pass bashrs: {}", quoted);
     }
 }

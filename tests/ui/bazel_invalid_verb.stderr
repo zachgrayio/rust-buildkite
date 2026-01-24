@@ -1,0 +1,5 @@
+error: Unknown bazel command 'badverb'. Valid commands: build, test, run, query, cquery, aquery, info, version, clean, shutdown, fetch, sync, coverage, mobile-install, print_action
+ --> tests/ui/bazel_invalid_verb.rs:7:33
+  |
+7 |                 command: bazel!("badverb //..."),
+  |                                 ^^^^^^^^^^^^^^^

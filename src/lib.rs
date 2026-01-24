@@ -108,6 +108,9 @@ pub use serde_json;
 
 pub use rust_buildkite_macros::{cmd, pipeline};
 
+#[cfg(feature = "bazel")]
+pub use rust_buildkite_macros::bazel;
+
 /// Discovers all available commands from the host machine's PATH at compile time.
 ///
 /// Note: The `pipeline!` macro automatically uses host PATH discovery by default,
@@ -167,6 +170,7 @@ pub use codegen::*;
 pub mod error;
 pub use error::*;
 
+pub mod bazel;
 pub mod client;
 pub mod services;
 pub mod types;
