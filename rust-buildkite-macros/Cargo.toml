@@ -12,5 +12,17 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 
-# Shell command parsing and linting
 bashrs = "6.53"
+
+prost = { version = "0.13", optional = true }
+prost-types = { version = "0.13", optional = true }
+tonic = { version = "0.13", optional = true }
+starlark = { version = "0.13", optional = true }
+
+[build-dependencies]
+prost-build = { version = "0.13", optional = true }
+tonic-build = { version = "0.13", optional = true }
+
+[features]
+default = []
+bazel = ["prost", "prost-types", "tonic", "prost-build", "tonic-build", "starlark"]
