@@ -5679,13 +5679,27 @@ impl CmdExpr {
     
     /// Check if the command exists on the filesystem (for path-based commands).
     /// Returns Ok(()) if valid, Err with message if path doesn't exist.
+    /// For relative paths (./foo), resolves against the workspace root detected from
+    /// RUST_SCRIPT_BASE_PATH or CARGO_MANIFEST_DIR, not the current working directory.
+    /// This handles the case where rust-script compiles from a cache directory.
     fn validate_path_exists(command_name: &str, allow_missing: &[&str]) -> std::result::Result<(), String> {
-        use std::path::Path;
+        use std::path::PathBuf;
+        
         if allow_missing.iter().any(|allowed| *allowed == command_name) {
             return Ok(());
         }
+        
         if command_name.starts_with('/') || command_name.starts_with("./") {
-            let path = Path::new(command_name);
+            let path: PathBuf = if command_name.starts_with("./") {
+                if let Ok(workspace) = crate::bazel::find_bazel_workspace_from_env() {
+                    workspace.join(&command_name[2..])
+                } else {
+                    PathBuf::from(command_name)
+                }
+            } else {
+                PathBuf::from(command_name)
+            };
+            
             if !path.exists() {
                 return Err(format!(
                     "Command path '{}' does not exist on the build machine.\n\
@@ -6010,8 +6024,11 @@ impl BazelExpr {
                     }
                 }
 
-                if let Err(e) = bazel::canonicalize_flags(&verb, &args, &workspace) {
-                    return Err(Error::new(span, e));
+                let is_custom_verb = custom_verbs.iter().any(|v| v == &verb);
+                if !is_custom_verb {
+                    if let Err(e) = bazel::canonicalize_flags(&verb, &args, &workspace) {
+                        return Err(Error::new(span, e));
+                    }
                 }
 
                 if dry_run {
