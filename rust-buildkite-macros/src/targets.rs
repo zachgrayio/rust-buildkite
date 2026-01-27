@@ -120,13 +120,18 @@ pub fn get_current_package(workspace: &Path, script_dir: &Path) -> Option<String
 }
 
 pub fn extract_targets_from_args(args: &[&str]) -> Vec<String> {
-    args.iter()
+    let args_before_separator: &[&str] = match args.iter().position(|&a| a == "--") {
+        Some(pos) => &args[..pos],
+        None => args,
+    };
+    
+    args_before_separator
+        .iter()
         .filter(|arg| !arg.starts_with('-'))
         .filter(|arg| {
             arg.starts_with("//")
                 || arg.starts_with('@')
                 || arg.starts_with(':')
-                || (!arg.contains('=') && !arg.contains('/'))
         })
         .map(|s| s.to_string())
         .collect()
@@ -209,6 +214,13 @@ mod tests {
         let args = vec!["//foo:bar", "--config=opt", "//baz:qux", "-k", ":local"];
         let targets = extract_targets_from_args(&args);
         assert_eq!(targets, vec!["//foo:bar", "//baz:qux", ":local"]);
+    }
+
+    #[test]
+    fn test_extract_targets_stops_at_separator() {
+        let args = vec!["//foo:bar", "--config=opt", "--", "--cicd_env", "stage"];
+        let targets = extract_targets_from_args(&args);
+        assert_eq!(targets, vec!["//foo:bar"]);
     }
 
     #[test]
