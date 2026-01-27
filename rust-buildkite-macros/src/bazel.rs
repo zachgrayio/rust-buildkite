@@ -210,7 +210,12 @@ pub fn canonicalize_flags(
 ) -> Result<Vec<String>, String> {
     use std::process::Command;
 
-    let flags: Vec<&str> = args
+    let args_before_separator: &[&str] = match args.iter().position(|&a| a == "--") {
+        Some(pos) => &args[..pos],
+        None => args,
+    };
+
+    let flags: Vec<&str> = args_before_separator
         .iter()
         .filter(|a| {
             a.starts_with('-')

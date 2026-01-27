@@ -945,14 +945,16 @@ impl PipelineDef {
     /// Validate all command steps against the allowed commands list.
     /// When allowed_commands is set, the command name must be in the allowed list.
     /// Note: Raw strings are already rejected at parse time - cmd!() is always required.
-    /// Note: Path-based commands (./script, /path/to/cmd) bypass allowlist - they're validated
-    ///       separately by validate_paths() for existence.
+    /// Note: Path-based commands (./script, /path/to/cmd, relative/path) bypass allowlist - 
+    ///       they're validated separately by validate_paths() for existence.
     fn validate_commands(&self, steps: &[StepDef], allowed: &HashSet<&str>) -> Result<()> {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
                     if let Some((cmd_name, span)) = cmd_step.get_command_name() {
-                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") {
+                        // Skip path-based commands - they're validated by validate_paths()
+                        // Paths start with /, ./ or contain / (relative paths like dir/script.sh)
+                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/') {
                             continue;
                         }
                         
@@ -980,14 +982,15 @@ impl PipelineDef {
         Ok(())
     }
 
-    /// Validate that path-based commands (./script.sh, /usr/bin/env) exist at compile time.
+    /// Validate that path-based commands (./script.sh, /usr/bin/env, dir/script.sh) exist at compile time.
     /// Paths in allow_missing are skipped (for runtime-only paths).
     fn validate_paths(&self, steps: &[StepDef], allow_missing: &[&str]) -> Result<()> {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
                     if let Some((cmd_name, span)) = cmd_step.get_command_name() {
-                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") {
+                        // Check paths: absolute (/path), explicit relative (./path), or implicit relative (dir/path)
+                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/') {
                             if let Err(e) = CmdExpr::validate_path_exists(&cmd_name, allow_missing) {
                                 return Err(Error::new(span, e));
                             }
@@ -1783,8 +1786,9 @@ impl StepDef {
 
         let mut step = CommandStepDef::new_empty();
         let mut verb: Option<String> = fixed_verb.map(|s| s.to_string());
-        let mut target_patterns: Option<String> = None;
+        let mut target_patterns: Option<(String, proc_macro2::Span)> = None;
         let mut extra_args: Vec<String> = Vec::new();
+        let mut extra_args_expr: Option<syn::Expr> = None;
         let mut validate_targets = true;
         let mut dry_run = false;
         let mut step_custom_verbs: Vec<String> = Vec::new();
@@ -1806,11 +1810,7 @@ impl StepDef {
                 }
                 "target_patterns" => {
                     let t: LitStr = content.parse()?;
-                    let val = t.value();
-                    if let Err(e) = Self::validate_target_patterns(&val) {
-                        return Err(Error::new(t.span(), e));
-                    }
-                    target_patterns = Some(val);
+                    target_patterns = Some((t.value(), t.span()));
                 }
                 "flags" => {
                     if content.peek(syn::token::Bracket) {
@@ -1823,11 +1823,14 @@ impl StepDef {
                                 flags_content.parse::<Token![,]>()?;
                             }
                         }
-                    } else {
+                    } else if content.peek(LitStr) {
                         let flags_str: LitStr = content.parse()?;
                         for flag in flags_str.value().split_whitespace() {
                             extra_args.push(flag.to_string());
                         }
+                    } else {
+                        let expr: syn::Expr = content.parse()?;
+                        extra_args_expr = Some(expr);
                     }
                 }
                 "validate_targets" => {
@@ -1973,27 +1976,39 @@ impl StepDef {
         let verb = verb.ok_or_else(|| {
             Error::new(step_span, "bazel_command requires 'verb' field")
         })?;
-        let target = target_patterns.ok_or_else(|| {
+        let (target, target_span) = target_patterns.ok_or_else(|| {
             Error::new(step_span, "bazel step requires 'target_patterns' field")
         })?;
+
+        if validate_targets {
+            if let Err(e) = Self::validate_target_patterns(&target) {
+                return Err(Error::new(target_span, e));
+            }
+        }
 
         let has_subtraction = target.split_whitespace().any(|p| {
             p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
         });
 
-        let mut cmd_parts = vec![verb.clone()];
-        cmd_parts.extend(extra_args);
-        if has_subtraction {
-            cmd_parts.push("--".to_string());
-        }
-        cmd_parts.push(target);
-        let bazel_cmd = cmd_parts.join(" ");
+        if let Some(flags_expr) = extra_args_expr {
+            let base_cmd = verb.clone();
+            
+            step.command = Some(CommandValue::from_runtime_bazel(base_cmd, flags_expr, target.clone()));
+        } else {
+            let mut cmd_parts = vec![verb.clone()];
+            cmd_parts.extend(extra_args);
+            if has_subtraction {
+                cmd_parts.push("--".to_string());
+            }
+            cmd_parts.push(target);
+            let bazel_cmd = cmd_parts.join(" ");
 
-        let lit = LitStr::new(&bazel_cmd, step_span);
-        let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
-        all_custom_verbs.extend(step_custom_verbs);
-        let bazel_expr = BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
-        step.command = Some(CommandValue::from_bazel(bazel_expr));
+            let lit = LitStr::new(&bazel_cmd, step_span);
+            let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
+            all_custom_verbs.extend(step_custom_verbs);
+            let bazel_expr = BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
+            step.command = Some(CommandValue::from_bazel(bazel_expr));
+        }
 
         Ok(StepDef::Command(step))
     }
@@ -2919,6 +2934,14 @@ enum CommandSource {
     /// Bazel command via bazel!("...") - requires "bazel" feature
     #[cfg(feature = "bazel")]
     Bazel(BazelExpr),
+    /// Bazel command with runtime flags expression (format!, concat!, etc.)
+    /// Skips compile-time validation, evaluates flags at runtime
+    #[cfg(feature = "bazel")]
+    RuntimeBazel {
+        base_cmd: String,      // e.g., "run " or "test "
+        flags_expr: syn::Expr, // e.g., format!("--branch {}", branch)
+        target: String,        // e.g., "//tools/ci:update_branch"
+    },
 }
 
 /// Represents a validated command via cmd!("...") or bazel!("...")
@@ -2936,12 +2959,21 @@ impl CommandValue {
         Self(CommandSource::Bazel(bazel))
     }
 
-    /// Get the command string value
+    #[cfg(feature = "bazel")]
+    fn from_runtime_bazel(base_cmd: String, flags_expr: syn::Expr, target: String) -> Self {
+        Self(CommandSource::RuntimeBazel { base_cmd, flags_expr, target })
+    }
+
+    /// Get the command string value (for static commands only)
     fn get_command_string(&self) -> String {
         match &self.0 {
             CommandSource::Shell(cmd) => cmd.command.clone(),
             #[cfg(feature = "bazel")]
             CommandSource::Bazel(bazel) => format!("bazel {}", bazel.command),
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { base_cmd, target, .. } => {
+                format!("bazel {} <runtime-flags> {}", base_cmd.trim(), target)
+            }
         }
     }
 
@@ -2951,6 +2983,8 @@ impl CommandValue {
             CommandSource::Shell(cmd) => cmd.command_name.clone(),
             #[cfg(feature = "bazel")]
             CommandSource::Bazel(_) => "bazel".to_string(),
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { .. } => "bazel".to_string(),
         }
     }
 
@@ -2961,6 +2995,8 @@ impl CommandValue {
             CommandSource::Shell(cmd) => &cmd.undefined_vars,
             #[cfg(feature = "bazel")]
             CommandSource::Bazel(bazel) => &bazel.undefined_vars,
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { .. } => &[],
         }
     }
 
@@ -2970,6 +3006,8 @@ impl CommandValue {
             CommandSource::Shell(cmd) => cmd.span,
             #[cfg(feature = "bazel")]
             CommandSource::Bazel(bazel) => bazel.span,
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { .. } => proc_macro2::Span::call_site(),
         }
     }
 
@@ -2980,6 +3018,18 @@ impl CommandValue {
             CommandSource::Shell(_) => false,
             #[cfg(feature = "bazel")]
             CommandSource::Bazel(_) => true,
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { .. } => true,
+        }
+    }
+    
+    /// Check if this is a runtime expression (can't be validated at compile time)
+    #[allow(dead_code)]
+    fn is_runtime(&self) -> bool {
+        match &self.0 {
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { .. } => true,
+            _ => false,
         }
     }
 
@@ -2990,6 +3040,7 @@ impl CommandValue {
         match &self.0 {
             CommandSource::Shell(_) => None,
             CommandSource::Bazel(bazel) => Some(&bazel.verb),
+            CommandSource::RuntimeBazel { base_cmd, .. } => Some(base_cmd.trim()),
         }
     }
 }
@@ -3383,8 +3434,20 @@ impl CommandStepDef {
 
     fn to_tokens_inner(&self) -> TokenStream2 {
         let cmd_value = self.command.as_ref().expect("command must be set");
-        let cmd_string = cmd_value.get_command_string();
-        let cmd_tokens = quote! { #cmd_string.to_string() };
+        
+        let cmd_tokens = match &cmd_value.0 {
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel { base_cmd, flags_expr, target } => {
+                quote! {
+                    format!("bazel {} {} {}", #base_cmd, #flags_expr, #target)
+                }
+            }
+            _ => {
+                // Static command - use the pre-computed string
+                let cmd_string = cmd_value.get_command_string();
+                quote! { #cmd_string.to_string() }
+            }
+        };
 
         let label_tokens = if let Some(label) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#label.to_string()))) }
@@ -5691,9 +5754,16 @@ impl CmdExpr {
         
         if command_name.starts_with('/') || command_name.starts_with("./") {
             let path: PathBuf = if command_name.starts_with("./") {
-                if let Ok(workspace) = crate::bazel::find_bazel_workspace_from_env() {
-                    workspace.join(&command_name[2..])
-                } else {
+                #[cfg(feature = "bazel")]
+                {
+                    if let Ok(workspace) = crate::bazel::find_bazel_workspace_from_env() {
+                        workspace.join(&command_name[2..])
+                    } else {
+                        PathBuf::from(command_name)
+                    }
+                }
+                #[cfg(not(feature = "bazel"))]
+                {
                     PathBuf::from(command_name)
                 }
             } else {
