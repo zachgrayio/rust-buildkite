@@ -260,8 +260,10 @@ enum RuntimeEnvItem {
 }
 
 struct PipelineDef {
-    /// Optional list of allowed commands for validation
+    /// Optional list of allowed commands for validation (replaces defaults)
     allowed_commands: Option<Vec<(String, proc_macro2::Span)>>,
+    /// Additional commands to allow (merged with defaults from PATH)
+    additional_commands: Vec<String>,
     /// Paths that are allowed to not exist at compile time (validated at runtime instead)
     allow_missing_paths: Vec<String>,
     /// Allowed environment variables (in addition to those in env block)
@@ -274,6 +276,7 @@ struct PipelineDef {
 impl Parse for PipelineDef {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut allowed_commands = None;
+        let mut additional_commands = Vec::new();
         let mut allow_missing_paths = Vec::new();
         let mut runtime_env = None;
         let mut env = None;
@@ -371,6 +374,47 @@ impl Parse for PipelineDef {
                     }
                     allowed_commands = Some(commands);
                 }
+                "additional_commands" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        if content.peek(LitStr) {
+                            let lit: LitStr = content.parse()?;
+                            additional_commands.push(lit.value());
+                        } else {
+                            let mut cmd_name = String::new();
+                            while !content.is_empty() && !content.peek(Token![,]) {
+                                if content.peek(Token![.]) {
+                                    content.parse::<Token![.]>()?;
+                                    cmd_name.push('.');
+                                } else if content.peek(Token![/]) {
+                                    content.parse::<Token![/]>()?;
+                                    cmd_name.push('/');
+                                } else if content.peek(Token![-]) {
+                                    content.parse::<Token![-]>()?;
+                                    cmd_name.push('-');
+                                } else if content.peek(Token![_]) {
+                                    content.parse::<Token![_]>()?;
+                                    cmd_name.push('_');
+                                } else if content.peek(Ident) {
+                                    let ident: Ident = content.parse()?;
+                                    cmd_name.push_str(&ident.to_string());
+                                } else if content.peek(syn::LitInt) {
+                                    let lit: syn::LitInt = content.parse()?;
+                                    cmd_name.push_str(&lit.to_string());
+                                } else {
+                                    break;
+                                }
+                            }
+                            if !cmd_name.is_empty() {
+                                additional_commands.push(cmd_name);
+                            }
+                        }
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
                 "env" => {
                     let content;
                     braced!(content in input);
@@ -406,7 +450,14 @@ impl Parse for PipelineDef {
             }
         }
 
-        Ok(PipelineDef { allowed_commands, allow_missing_paths, runtime_env, env, steps })
+        Ok(PipelineDef {
+            allowed_commands,
+            additional_commands,
+            allow_missing_paths,
+            runtime_env,
+            env,
+            steps,
+        })
     }
 }
 
@@ -440,11 +491,14 @@ impl PipelineDef {
         }
         let allow_missing: Vec<&str> = self.allow_missing_paths.iter().map(|s| s.as_str()).collect();
         self.validate_paths(&self.steps, &allow_missing)?;
-        let allowed_names: HashSet<String> = if let Some(allowed) = &self.allowed_commands {
+        let mut allowed_names: HashSet<String> = if let Some(allowed) = &self.allowed_commands {
             allowed.iter().map(|(s, _)| s.clone()).collect()
         } else {
             discover_host_path_commands()
         };
+        for cmd in &self.additional_commands {
+            allowed_names.insert(cmd.clone());
+        }
         let allowed_refs: HashSet<&str> = allowed_names.iter().map(|s| s.as_str()).collect();
         self.validate_commands(&self.steps, &allowed_refs)?;
         self.validate_env_vars(&self.steps)?;
