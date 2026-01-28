@@ -45,8 +45,8 @@ fn expand_known_env_list(ident: &str) -> Option<&'static [&'static str]> {
             "BUILDKITE", "BUILDKITE_AGENT_NAME", "BUILDKITE_BRANCH", "BUILDKITE_BUILD_ID",
             "BUILDKITE_BUILD_NUMBER", "BUILDKITE_BUILD_URL", "BUILDKITE_COMMIT", 
             "BUILDKITE_JOB_ID", "BUILDKITE_LABEL", "BUILDKITE_MESSAGE",
-            "BUILDKITE_ORGANIZATION_SLUG", "BUILDKITE_PIPELINE_SLUG", "BUILDKITE_PULL_REQUEST",
-            "BUILDKITE_PULL_REQUEST_BASE_BRANCH", "BUILDKITE_PULL_REQUEST_REPO",
+            "BUILDKITE_ORGANIZATION_SLUG", "BUILDKITE_PIPELINE_ID", "BUILDKITE_PIPELINE_SLUG",
+            "BUILDKITE_PULL_REQUEST", "BUILDKITE_PULL_REQUEST_BASE_BRANCH", "BUILDKITE_PULL_REQUEST_REPO",
             "BUILDKITE_REPO", "BUILDKITE_SOURCE", "BUILDKITE_STEP_KEY", "BUILDKITE_TAG",
             "BUILDKITE_TRIGGERED_FROM_BUILD_ID",
         ]),
@@ -139,7 +139,8 @@ impl NestedValue {
                     lit.value()
                 } else {
                     let ident: Ident = content.parse()?;
-                    ident.to_string()
+                    // Strip r# prefix for raw identifiers (e.g., r#if -> if)
+                    strip_raw_ident(&ident.to_string()).to_string()
                 };
                 content.parse::<Token![:]>()?;
                 let value = NestedValue::parse(&content)?;
