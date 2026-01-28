@@ -503,6 +503,53 @@ mod validation_options {
     use super::*;
 
     #[test]
+    fn omit_target_patterns_with_custom_verb() {
+        let p = pipeline! {
+            custom_verbs: ["configure"],
+            steps: [
+                bazel_configure {
+                    label: "configure",
+                    key: "configure"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel configure"));
+        assert!(!yaml.contains("//"));
+    }
+
+    #[test]
+    fn omit_target_patterns_with_info() {
+        let p = pipeline! {
+            steps: [
+                bazel_command {
+                    verb: "info",
+                    label: "bazel info",
+                    key: "info"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel info"));
+    }
+
+    #[test]
+    fn omit_target_patterns_with_flags() {
+        let p = pipeline! {
+            custom_verbs: ["configure"],
+            steps: [
+                bazel_configure {
+                    flags: "--enable_bzlmod",
+                    label: "configure",
+                    key: "configure"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel configure --enable_bzlmod"));
+    }
+
+    #[test]
     fn validate_targets_false() {
         let p = pipeline! {
             env: {},
