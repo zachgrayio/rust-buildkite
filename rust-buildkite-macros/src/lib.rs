@@ -251,27 +251,201 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Top-level pipeline definition
-/// Represents a runtime_env item - either a string literal or a const reference
 enum RuntimeEnvItem {
-    /// A single string literal like "HOME"
     Literal(String),
-    /// A const reference like SHELL_ENV or rust_buildkite::BUILDKITE_ENV
     ConstRef(syn::Path),
 }
 
+#[derive(Clone)]
+enum NotifyValue {
+    Slack { channel: String, if_: Option<String> },
+    Email { email: String, if_: Option<String> },
+    Webhook { url: String, if_: Option<String> },
+    Pagerduty { service: String, if_: Option<String> },
+    GithubCommitStatus { context: Option<String>, if_: Option<String> },
+    GithubCheck,
+    Basecamp { url: String, if_: Option<String> },
+}
+
+impl NotifyValue {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let content;
+        braced!(content in input);
+        
+        let first_key: Ident = content.parse()?;
+        content.parse::<Token![:]>()?;
+        
+        match strip_raw_ident(&first_key.to_string()) {
+            "slack" => {
+                let channel: LitStr = content.parse()?;
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::Slack { channel: channel.value(), if_ })
+            }
+            "email" => {
+                let email: LitStr = content.parse()?;
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::Email { email: email.value(), if_ })
+            }
+            "webhook" => {
+                let url: LitStr = content.parse()?;
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::Webhook { url: url.value(), if_ })
+            }
+            "pagerduty_change_event" => {
+                let service: LitStr = content.parse()?;
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::Pagerduty { service: service.value(), if_ })
+            }
+            "github_commit_status" => {
+                let nested = NestedValue::parse(&content)?;
+                let context = if let NestedValue::Object(pairs) = nested {
+                    pairs.iter().find(|(k, _)| k == "context").and_then(|(_, v)| {
+                        if let NestedValue::String(s) = v { Some(s.clone()) } else { None }
+                    })
+                } else {
+                    None
+                };
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::GithubCommitStatus { context, if_ })
+            }
+            "github_check" => {
+                let _ = NestedValue::parse(&content)?;
+                Ok(NotifyValue::GithubCheck)
+            }
+            "basecamp_campfire" => {
+                let url: LitStr = content.parse()?;
+                let if_ = Self::parse_optional_if(&content)?;
+                Ok(NotifyValue::Basecamp { url: url.value(), if_ })
+            }
+            other => Err(Error::new(first_key.span(), format!("unknown notify type: {}", other)))
+        }
+    }
+    
+    fn parse_optional_if(content: ParseStream) -> Result<Option<String>> {
+        if content.peek(Token![,]) {
+            content.parse::<Token![,]>()?;
+            if content.peek(Ident) {
+                let key: Ident = content.parse()?;
+                if strip_raw_ident(&key.to_string()) == "if" {
+                    content.parse::<Token![:]>()?;
+                    let val: LitStr = content.parse()?;
+                    if content.peek(Token![,]) {
+                        content.parse::<Token![,]>()?;
+                    }
+                    return Ok(Some(val.value()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn to_tokens(&self) -> TokenStream2 {
+        match self {
+            NotifyValue::Slack { channel, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::Slack(::rust_buildkite::NotifySlack {
+                        slack: Some(::rust_buildkite::NotifySlackSlack::String(#channel.to_string())),
+                        if_: #if_tokens,
+                    })
+                }
+            }
+            NotifyValue::Email { email, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::Email(::rust_buildkite::NotifyEmail {
+                        email: Some(#email.to_string()),
+                        if_: #if_tokens,
+                    })
+                }
+            }
+            NotifyValue::Webhook { url, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::Webhook(::rust_buildkite::NotifyWebhook {
+                        webhook: Some(#url.to_string()),
+                        if_: #if_tokens,
+                    })
+                }
+            }
+            NotifyValue::Pagerduty { service, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::Pagerduty(::rust_buildkite::NotifyPagerduty {
+                        pagerduty_change_event: Some(#service.to_string()),
+                        if_: #if_tokens,
+                    })
+                }
+            }
+            NotifyValue::GithubCommitStatus { context, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                let context_tokens = match context {
+                    Some(c) => quote! { Some(::rust_buildkite::NotifyGithubCommitStatusGithubCommitStatus { context: Some(#c.to_string()) }) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::GithubCommitStatus(::rust_buildkite::NotifyGithubCommitStatus {
+                        github_commit_status: #context_tokens,
+                        if_: #if_tokens,
+                    })
+                }
+            }
+            NotifyValue::GithubCheck => {
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::GithubCheck(::rust_buildkite::NotifyGithubCheck {
+                        github_check: None,
+                    })
+                }
+            }
+            NotifyValue::Basecamp { url, if_ } => {
+                let if_tokens = match if_ {
+                    Some(c) => quote! { Some(::rust_buildkite::If(#c.to_string())) },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::BuildNotifyItem::Basecamp(::rust_buildkite::NotifyBasecamp {
+                        basecamp_campfire: Some(#url.to_string()),
+                        if_: #if_tokens,
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SecretsValue {
+    Array(Vec<String>),
+    Object(Vec<(String, String)>),
+}
+
 struct PipelineDef {
-    /// Optional list of allowed commands for validation (replaces defaults)
     allowed_commands: Option<Vec<(String, proc_macro2::Span)>>,
-    /// Additional commands to allow (merged with defaults from PATH)
     additional_commands: Vec<String>,
-    /// Paths that are allowed to not exist at compile time (validated at runtime instead)
     allow_missing_paths: Vec<String>,
-    /// Allowed environment variables (in addition to those in env block)
-    /// Can be string literals or const references to &[&str] arrays
     runtime_env: Option<Vec<RuntimeEnvItem>>,
     env: Option<Vec<(Ident, LitStr)>>,
     steps: Vec<StepDef>,
+    agents: Vec<(String, String)>,
+    notify: Vec<NotifyValue>,
+    image: Option<String>,
+    secrets: Option<SecretsValue>,
+    priority: Option<i64>,
 }
 
 impl Parse for PipelineDef {
@@ -282,6 +456,11 @@ impl Parse for PipelineDef {
         let mut runtime_env = None;
         let mut env = None;
         let mut steps = Vec::new();
+        let mut agents = Vec::new();
+        let mut notify = Vec::new();
+        let mut image = None;
+        let mut secrets = None;
+        let mut priority = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -438,6 +617,66 @@ impl Parse for PipelineDef {
                         Punctuated::parse_terminated(&content)?;
                     steps = step_list.into_iter().collect();
                 }
+                "agents" => {
+                    let content;
+                    braced!(content in input);
+                    while !content.is_empty() {
+                        let k: Ident = content.parse()?;
+                        content.parse::<Token![:]>()?;
+                        let v: LitStr = content.parse()?;
+                        agents.push((k.to_string(), v.value()));
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "notify" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        notify.push(NotifyValue::parse(&content)?);
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "image" => {
+                    let lit: LitStr = input.parse()?;
+                    image = Some(lit.value());
+                }
+                "secrets" => {
+                    if input.peek(syn::token::Bracket) {
+                        let content;
+                        bracketed!(content in input);
+                        let mut items = Vec::new();
+                        while !content.is_empty() {
+                            let lit: LitStr = content.parse()?;
+                            items.push(lit.value());
+                            if content.peek(Token![,]) {
+                                content.parse::<Token![,]>()?;
+                            }
+                        }
+                        secrets = Some(SecretsValue::Array(items));
+                    } else {
+                        let content;
+                        braced!(content in input);
+                        let mut pairs = Vec::new();
+                        while !content.is_empty() {
+                            let k: Ident = content.parse()?;
+                            content.parse::<Token![:]>()?;
+                            let v: LitStr = content.parse()?;
+                            pairs.push((k.to_string(), v.value()));
+                            if content.peek(Token![,]) {
+                                content.parse::<Token![,]>()?;
+                            }
+                        }
+                        secrets = Some(SecretsValue::Object(pairs));
+                    }
+                }
+                "priority" => {
+                    let lit: syn::LitInt = input.parse()?;
+                    priority = Some(lit.base10_parse()?);
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -458,6 +697,11 @@ impl Parse for PipelineDef {
             runtime_env,
             env,
             steps,
+            agents,
+            notify,
+            image,
+            secrets,
+            priority,
         })
     }
 }
@@ -547,6 +791,61 @@ impl PipelineDef {
             Vec::new()
         };
 
+        let agents_tokens = if !self.agents.is_empty() {
+            let inserts: Vec<TokenStream2> = self.agents.iter().map(|(k, v)| {
+                quote! { __agents_map.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
+            }).collect();
+            quote! {
+                .agents({
+                    let mut __agents_map = ::rust_buildkite::serde_json::Map::new();
+                    #(#inserts)*
+                    Some(::rust_buildkite::Agents::Object(::rust_buildkite::AgentsObject(__agents_map)))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let notify_tokens = if !self.notify.is_empty() {
+            let items: Vec<TokenStream2> = self.notify.iter().map(|n| n.to_tokens()).collect();
+            quote! {
+                .notify(Some(::rust_buildkite::BuildNotify(vec![#(#items),*])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let image_tokens = match &self.image {
+            Some(i) => quote! { .image(Some(::rust_buildkite::Image(#i.to_string()))) },
+            None => quote! {},
+        };
+
+        let secrets_tokens = match &self.secrets {
+            Some(SecretsValue::Array(items)) => {
+                quote! {
+                    .secrets(Some(::rust_buildkite::Secrets::Array(vec![#(#items.to_string()),*])))
+                }
+            }
+            Some(SecretsValue::Object(pairs)) => {
+                let inserts: Vec<TokenStream2> = pairs.iter().map(|(k, v)| {
+                    quote! { __secrets_map.insert(#k.to_string(), #v.to_string()); }
+                }).collect();
+                quote! {
+                    .secrets({
+                        let mut __secrets_map = ::std::collections::HashMap::new();
+                        #(#inserts)*
+                        Some(::rust_buildkite::Secrets::Object(__secrets_map))
+                    })
+                }
+            }
+            None => quote! {},
+        };
+
+        let priority_tokens = match &self.priority {
+            Some(p) => quote! { .priority(Some(::rust_buildkite::Priority(#p))) },
+            None => quote! {},
+        };
+
         Ok(quote! {
             {
                 #(#const_ref_uses)*
@@ -557,6 +856,11 @@ impl PipelineDef {
                             #(#step_tokens),*
                         ]))
                         .env(#env_tokens)
+                        #agents_tokens
+                        #notify_tokens
+                        #image_tokens
+                        #secrets_tokens
+                        #priority_tokens
                         .try_into()
                         .expect("pipeline construction failed");
                 __result

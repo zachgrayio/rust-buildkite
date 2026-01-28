@@ -600,3 +600,88 @@ EOF"#);
     //     assert!(c.contains("date"));
     // }
 }
+
+mod pipeline_properties {
+    use super::*;
+
+    #[test]
+    fn notify_slack() {
+        let p = pipeline! {
+            notify: [{ slack: "#builds" }],
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("slack"));
+    }
+
+    #[test]
+    fn notify_slack_with_if() {
+        let p = pipeline! {
+            notify: [{ slack: "#builds", r#if: "build.state == 'failed'" }],
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("slack"));
+        assert!(yaml.contains("if"));
+    }
+
+    #[test]
+    fn notify_email() {
+        let p = pipeline! {
+            notify: [{ email: "team@example.com" }],
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("email"));
+    }
+
+    #[test]
+    fn agents_object() {
+        let p = pipeline! {
+            agents: { queue: "deploy" },
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("queue"));
+    }
+
+    #[test]
+    fn image_string() {
+        let p = pipeline! {
+            image: "node:18-alpine",
+            steps: [command(cmd!("npm test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("node:18-alpine"));
+    }
+
+    #[test]
+    fn secrets_array() {
+        let p = pipeline! {
+            secrets: ["API_KEY"],
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("API_KEY"));
+    }
+
+    #[test]
+    fn secrets_object() {
+        let p = pipeline! {
+            secrets: { MY_KEY: "API_KEY" },
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("MY_KEY"));
+    }
+
+    #[test]
+    fn priority_integer() {
+        let p = pipeline! {
+            priority: 10,
+            steps: [command(cmd!("echo test")).key("test")]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("priority"));
+    }
+}
