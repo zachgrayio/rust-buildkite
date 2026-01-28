@@ -9,7 +9,17 @@ use rust_buildkite::pipeline;
 
 fn main() {
     let pipeline = pipeline! {
-        env: {},
+        env: {
+            FOO: "bar"
+        },
+        agents: { queue: "bazel-runners" },
+        notify: [
+            { slack: "#bazel-builds" },
+            { slack: "#alerts", r#if: "build.state == 'failed'" }
+        ],
+        image: "gcr.io/bazel-public/bazel:latest",
+        secrets: ["REMOTE_CACHE_KEY"],
+        priority: 5,
 
         steps: [
             command {

@@ -726,3 +726,214 @@ mod integration {
         assert!(yaml.contains("soft_fail: true"));
     }
 }
+
+mod pipeline_properties {
+    use super::*;
+
+    #[test]
+    fn with_notify_slack() {
+        let p = pipeline! {
+            notify: [{ slack: "#bazel-builds" }],
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("slack"));
+        assert!(yaml.contains("#bazel-builds"));
+    }
+
+    #[test]
+    fn with_notify_slack_conditional() {
+        let p = pipeline! {
+            notify: [
+                { slack: "#builds" },
+                { slack: "#alerts", r#if: "build.state == 'failed'" }
+            ],
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    label: "test",
+                    key: "test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("#builds"));
+        assert!(yaml.contains("#alerts"));
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn with_notify_email() {
+        let p = pipeline! {
+            notify: [{ email: "team@example.com" }],
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("email"));
+    }
+
+    #[test]
+    fn with_notify_webhook() {
+        let p = pipeline! {
+            notify: [{ webhook: "https://hooks.example.com/notify" }],
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("webhook"));
+    }
+
+    #[test]
+    fn with_pipeline_agents() {
+        let p = pipeline! {
+            agents: { queue: "bazel-runners" },
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("agents:"));
+        assert!(yaml.contains("queue: bazel-runners"));
+    }
+
+    #[test]
+    fn with_image() {
+        let p = pipeline! {
+            image: "gcr.io/bazel-public/bazel:6.0.0",
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("image:"));
+        assert!(yaml.contains("gcr.io/bazel-public/bazel:6.0.0"));
+    }
+
+    #[test]
+    fn with_secrets_array() {
+        let p = pipeline! {
+            secrets: ["REMOTE_CACHE_KEY", "GCP_CREDENTIALS"],
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("secrets:"));
+        assert!(yaml.contains("REMOTE_CACHE_KEY"));
+        assert!(yaml.contains("GCP_CREDENTIALS"));
+    }
+
+    #[test]
+    fn with_secrets_object() {
+        let p = pipeline! {
+            secrets: { CACHE_KEY: "remote-cache-secret" },
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("secrets:"));
+        assert!(yaml.contains("CACHE_KEY"));
+    }
+
+    #[test]
+    fn with_priority() {
+        let p = pipeline! {
+            priority: 10,
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("priority: 10"));
+    }
+
+    #[test]
+    fn full_pipeline_with_all_properties() {
+        let p = pipeline! {
+            env: {
+                BAZEL_REMOTE_CACHE: "grpc://cache.example.com:9092"
+            },
+            agents: { queue: "bazel-linux", os: "linux" },
+            notify: [
+                { slack: "#ci-builds" },
+                { email: "oncall@example.com", r#if: "build.state == 'failed'" }
+            ],
+            image: "gcr.io/bazel-public/bazel:latest",
+            secrets: ["REMOTE_CACHE_KEY"],
+            priority: 5,
+            custom_verbs: ["lint"],
+            steps: [
+                bazel_lint {
+                    target_patterns: "//...",
+                    label: "lint",
+                    key: "lint"
+                },
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: "--verbose_failures",
+                    label: "build",
+                    key: "build",
+                    depends_on: ["lint"]
+                },
+                bazel_test {
+                    target_patterns: "//...",
+                    flags: ["--test_output=errors", "--jobs=8"],
+                    label: "test",
+                    key: "test",
+                    depends_on: ["build"],
+                    timeout_in_minutes: 60,
+                    soft_fail: true
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("BAZEL_REMOTE_CACHE"));
+        assert!(yaml.contains("queue: bazel-linux"));
+        assert!(yaml.contains("slack"));
+        assert!(yaml.contains("email"));
+        assert!(yaml.contains("image:"));
+        assert!(yaml.contains("secrets:"));
+        assert!(yaml.contains("priority: 5"));
+        assert!(yaml.contains("bazel lint"));
+        assert!(yaml.contains("bazel build"));
+        assert!(yaml.contains("bazel test"));
+    }
+}
