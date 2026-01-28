@@ -508,10 +508,12 @@ mod bashrs_behavior {
     // Heredoc without $ in content works fine
     #[test]
     fn heredoc_without_dollar_works() {
-        let c = cmd!(r#"cat <<EOF
+        let c = cmd!(
+            r#"cat <<EOF
 Hello World
 No dollar signs here
-EOF"#);
+EOF"#
+        );
         assert!(c.contains("<<EOF"));
     }
 

@@ -13,6 +13,8 @@ quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 
 bashrs = "6.53"
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 
 prost = { version = "0.13", optional = true }
 prost-types = { version = "0.13", optional = true }
@@ -25,4 +27,4 @@ tonic-build = { version = "0.13", optional = true }
 
 [features]
 default = []
-bazel = ["prost", "prost-types", "tonic", "prost-build", "tonic-build", "starlark"]
+bazel = ["prost", "prost-types", "tonic", "prost-build", "tonic-build", "starlark", "serde", "serde_json"]
