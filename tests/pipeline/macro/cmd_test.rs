@@ -402,3 +402,201 @@ mod runtime_env {
         assert!(yaml.contains("$PATH"));
     }
 }
+
+mod bashrs_behavior {
+    use super::*;
+
+    #[test]
+    fn simple_var_works() {
+        let c = cmd!(r#"echo "$VAR""#);
+        assert!(c.contains("$VAR"));
+    }
+
+    #[test]
+    fn braced_var_works() {
+        let c = cmd!(r#"echo "${VAR}""#);
+        assert!(c.contains("${VAR}"));
+    }
+
+    #[test]
+    fn var_with_default_works() {
+        let c = cmd!(r#"echo "${VAR:-default}""#);
+        assert!(c.contains("${VAR:-default}"));
+    }
+
+    #[test]
+    fn var_with_default_empty_string() {
+        let c = cmd!(r#"echo "${VAR:-}""#);
+        assert!(c.contains("${VAR:-}"));
+    }
+
+    #[test]
+    fn var_with_default_in_pipeline() {
+        let pipeline = pipeline! {
+            runtime_env: ["VAR"],
+            steps: [
+                command(cmd!(r#"echo "${VAR:-fallback}""#)).key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("${VAR:-fallback}"));
+    }
+
+    #[test]
+    fn simple_var_in_pipeline() {
+        let pipeline = pipeline! {
+            runtime_env: ["VAR"],
+            steps: [
+                command(cmd!(r#"echo "$VAR""#)).key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("$VAR"));
+    }
+
+    #[test]
+    fn braced_var_in_pipeline() {
+        let pipeline = pipeline! {
+            runtime_env: ["VAR"],
+            steps: [
+                command(cmd!(r#"echo "${VAR}""#)).key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("${VAR}"));
+    }
+
+    #[test]
+    fn simple_git_checkout() {
+        // Simple commands like git checkout "$VAR" -- file work fine
+        let c = cmd!(r#"git checkout "$BRANCH" -- file.txt"#);
+        assert!(c.contains("git checkout"));
+    }
+
+    #[test]
+    fn echo_multiple_vars() {
+        let c = cmd!(r#"echo "$FOO" "$BAR""#);
+        assert!(c.contains("$FOO"));
+        assert!(c.contains("$BAR"));
+    }
+
+    // =========================================================================
+    // BASHRS FALSE POSITIVES - WORKAROUNDS THAT WORK
+    // =========================================================================
+
+    // jq: Avoid $ in single quotes - use field access without $
+    #[test]
+    fn jq_workaround_no_dollar() {
+        let c = cmd!(r#"jq '.foo' file.json"#);
+        assert!(c.contains("jq"));
+    }
+
+    // jq: Use double quotes with escaping
+    #[test]
+    fn jq_workaround_double_quotes() {
+        let c = cmd!(r#"jq "{\"field\": .value}" file.json"#);
+        assert!(c.contains("jq"));
+    }
+
+    // date: Pipe to xargs avoids DET002 entirely (no command substitution)
+    #[test]
+    fn date_workaround_pipe_xargs() {
+        let c = cmd!(r#"date +%Y-%m-%d | xargs -I{} echo "Today is {}""#);
+        assert!(c.contains("date"));
+    }
+
+    // Heredoc without $ in content works fine
+    #[test]
+    fn heredoc_without_dollar_works() {
+        let c = cmd!(r#"cat <<EOF
+Hello World
+No dollar signs here
+EOF"#);
+        assert!(c.contains("<<EOF"));
+    }
+
+    // todo: find a solution for these false positives in bashrs.
+
+    // FAILS: [SC2086] [SC2128]
+    // #[test]
+    // fn heredoc_with_dollar_fails() {
+    //     let c = cmd!(r#"cat <<EOF
+    // Text with $variable
+    // EOF"#);
+    //     assert!(c.contains("<<EOF"));
+    // }
+
+    // FAILS: [SC2086] [SC2128] - quoted delimiter doesn't help
+    // #[test]
+    // fn heredoc_quoted_delimiter_fails() {
+    //     let c = cmd!(r#"cat <<'EOF'
+    // Text with $variable
+    // EOF"#);
+    //     assert!(c.contains("<<'EOF'"));
+    // }
+
+    // FAILS: [SC2086] [SC2128] - escaping doesn't help
+    // #[test]
+    // fn heredoc_escaped_dollar_fails() {
+    //     let c = cmd!(r#"cat <<EOF
+    // Text with \$variable
+    // EOF"#);
+    //     assert!(c.contains("<<EOF"));
+    // }
+
+    // FAILS: [SC2086] - bashrs doesn't understand single quote semantics
+    // #[test]
+    // fn jq_dollar_in_single_quotes_fails() {
+    //     let c = cmd!(r#"jq '{$var}' file.json"#);
+    //     assert!(c.contains("jq"));
+    // }
+
+    // FAILS: [SC2086] - escaping doesn't help either
+    // #[test]
+    // fn jq_escaped_dollar_fails() {
+    //     let c = cmd!(r#"jq '{\$var}' file.json"#);
+    //     assert!(c.contains("jq"));
+    // }
+
+    // FAILS: [SC2086] - --arg still has $ in single quotes
+    // #[test]
+    // fn jq_with_arg_fails() {
+    //     let c = cmd!(r#"jq --arg v "$VAR" '{($v): .value}' file.json"#);
+    //     assert!(c.contains("jq"));
+    // }
+
+    // FAILS: [SC2046] [DET002]
+    // #[test]
+    // fn cmd_subst_date_fails() {
+    //     let c = cmd!(r#"echo "Today is $(date +%Y-%m-%d)""#);
+    //     assert!(c.contains("$(date"));
+    // }
+
+    // FAILS: [SC2036] [SC2046] [DET002] - backticks are worse
+    // #[test]
+    // fn cmd_subst_backticks_fails() {
+    //     let c = cmd!(r#"echo "Today is `date +%Y-%m-%d`""#);
+    //     assert!(c.contains("date"));
+    // }
+
+    // FAILS: [DET002] - even properly quoted, DET002 fires
+    // #[test]
+    // fn cmd_subst_quoted_fails() {
+    //     let c = cmd!(r#"echo "Today is" "$(date +%Y-%m-%d)""#);
+    //     assert!(c.contains("date"));
+    // }
+
+    // FAILS: [SC2046] [DET002] - variable assignment doesn't help
+    // #[test]
+    // fn cmd_subst_via_variable_fails() {
+    //     let c = cmd!(r#"TODAY=$(date +%Y-%m-%d); echo "Today is $TODAY""#);
+    //     assert!(c.contains("date"));
+    // }
+
+    // FAILS: [DET002] - printf doesn't help
+    // #[test]
+    // fn cmd_subst_printf_fails() {
+    //     let c = cmd!(r#"printf "Today is %s\n" "$(date +%Y-%m-%d)""#);
+    //     assert!(c.contains("date"));
+    // }
+}
