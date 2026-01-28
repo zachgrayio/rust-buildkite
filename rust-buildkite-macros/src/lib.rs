@@ -1976,37 +1976,44 @@ impl StepDef {
         let verb = verb.ok_or_else(|| {
             Error::new(step_span, "bazel_command requires 'verb' field")
         })?;
-        let (target, target_span) = target_patterns.ok_or_else(|| {
-            Error::new(step_span, "bazel step requires 'target_patterns' field")
-        })?;
 
-        if validate_targets {
-            if let Err(e) = Self::validate_target_patterns(&target) {
-                return Err(Error::new(target_span, e));
+        let (target, should_validate) = match target_patterns {
+            Some((t, span)) => {
+                if validate_targets && !t.is_empty() {
+                    if let Err(e) = Self::validate_target_patterns(&t) {
+                        return Err(Error::new(span, e));
+                    }
+                }
+                (Some(t), validate_targets)
             }
-        }
+            None => (None, false),
+        };
 
-        let has_subtraction = target.split_whitespace().any(|p| {
-            p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
+        let has_subtraction = target.as_ref().map_or(false, |t| {
+            t.split_whitespace().any(|p| {
+                p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
+            })
         });
 
         if let Some(flags_expr) = extra_args_expr {
             let base_cmd = verb.clone();
-            
-            step.command = Some(CommandValue::from_runtime_bazel(base_cmd, flags_expr, target.clone()));
+            let target_str = target.unwrap_or_default();
+            step.command = Some(CommandValue::from_runtime_bazel(base_cmd, flags_expr, target_str));
         } else {
             let mut cmd_parts = vec![verb.clone()];
             cmd_parts.extend(extra_args);
-            if has_subtraction {
-                cmd_parts.push("--".to_string());
+            if let Some(ref t) = target {
+                if has_subtraction {
+                    cmd_parts.push("--".to_string());
+                }
+                cmd_parts.push(t.clone());
             }
-            cmd_parts.push(target);
             let bazel_cmd = cmd_parts.join(" ");
 
             let lit = LitStr::new(&bazel_cmd, step_span);
             let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
             all_custom_verbs.extend(step_custom_verbs);
-            let bazel_expr = BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
+            let bazel_expr = BazelExpr::from_lit_str(&lit, should_validate, dry_run, &all_custom_verbs)?;
             step.command = Some(CommandValue::from_bazel(bazel_expr));
         }
 
