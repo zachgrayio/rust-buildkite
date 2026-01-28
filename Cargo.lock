@@ -2356,6 +2356,8 @@ dependencies = [
  "prost-build",
  "prost-types",
  "quote",
+ "serde",
+ "serde_json",
  "starlark",
  "syn 2.0.114",
  "tonic",

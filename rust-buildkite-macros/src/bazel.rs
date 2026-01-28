@@ -2,9 +2,30 @@
 
 use crate::debug::debug_log;
 use crate::targets;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
-use std::time::Instant;
+use std::sync::Mutex;
+use std::time::{Instant, UNIX_EPOCH};
+
+/// In-memory cache for canonicalize-flags results within a single compilation.
+/// This avoids repeated disk I/O and subprocess calls for the same flags.
+static FLAGS_CACHE: Mutex<Option<FlagsCache>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct FlagsCache {
+    /// Cache entries keyed by (verb, flags_hash)
+    entries: HashMap<String, FlagsCacheEntry>,
+    /// Timestamp of bazelrc files when cache was created (for invalidation)
+    #[serde(default)]
+    bazelrc_mtime: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FlagsCacheEntry {
+    canonical_flags: Vec<String>,
+}
 
 pub fn find_bazel_workspace_from_env() -> Result<std::path::PathBuf, String> {
     let (workspace, _) = find_bazel_workspace_and_script_dir()?;
@@ -203,6 +224,85 @@ pub fn validate_verb_target_compatibility(
     Ok(())
 }
 
+/// Get the maximum mtime of bazelrc files in the workspace for cache invalidation.
+fn get_bazelrc_mtime(workspace: &Path) -> u64 {
+    let bazelrc_files = [
+        ".bazelrc",
+        ".bazelrc.user",
+        "bazel/bazelrc",
+    ];
+    
+    let mut max_mtime: u64 = 0;
+    for file in bazelrc_files {
+        if let Ok(metadata) = fs::metadata(workspace.join(file)) {
+            if let Ok(mtime) = metadata.modified() {
+                if let Ok(duration) = mtime.duration_since(UNIX_EPOCH) {
+                    max_mtime = max_mtime.max(duration.as_secs());
+                }
+            }
+        }
+    }
+    max_mtime
+}
+
+/// Generate a cache key from verb and flags.
+fn make_cache_key(verb: &str, flags: &[&str]) -> String {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    
+    let mut hasher = DefaultHasher::new();
+    verb.hash(&mut hasher);
+    for flag in flags {
+        flag.hash(&mut hasher);
+    }
+    format!("{}_{:x}", verb, hasher.finish())
+}
+
+/// Get the cache file path for a workspace.
+fn get_cache_file_path(workspace: &Path) -> std::path::PathBuf {
+    workspace.join(".buildkite").join(".bazel-flags-cache.json")
+}
+
+/// Load the flags cache from disk, validating against bazelrc mtime.
+fn load_flags_cache(workspace: &Path) -> FlagsCache {
+    let cache_path = get_cache_file_path(workspace);
+    let current_mtime = get_bazelrc_mtime(workspace);
+    
+    if let Ok(contents) = fs::read_to_string(&cache_path) {
+        if let Ok(cache) = serde_json::from_str::<FlagsCache>(&contents) {
+            // Invalidate if bazelrc files have changed
+            if cache.bazelrc_mtime == current_mtime {
+                debug_log!("bazel", "Loaded flags cache with {} entries", cache.entries.len());
+                return cache;
+            } else {
+                debug_log!("bazel", "Cache invalidated: bazelrc mtime changed ({} -> {})", 
+                    cache.bazelrc_mtime, current_mtime);
+            }
+        }
+    }
+    
+    FlagsCache {
+        entries: HashMap::new(),
+        bazelrc_mtime: current_mtime,
+    }
+}
+
+/// Save the flags cache to disk.
+fn save_flags_cache(workspace: &Path, cache: &FlagsCache) {
+    let cache_path = get_cache_file_path(workspace);
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    
+    if let Ok(json) = serde_json::to_string_pretty(cache) {
+        if let Err(e) = fs::write(&cache_path, json) {
+            debug_log!("bazel", "Failed to save flags cache: {}", e);
+        } else {
+            debug_log!("bazel", "Saved flags cache with {} entries", cache.entries.len());
+        }
+    }
+}
+
 pub fn canonicalize_flags(
     verb: &str,
     args: &[&str],
@@ -230,10 +330,26 @@ pub fn canonicalize_flags(
         return Ok(Vec::new());
     }
 
+    let cache_key = make_cache_key(verb, &flags);
+    {
+        let mut guard = FLAGS_CACHE.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(load_flags_cache(workspace));
+        }
+        
+        if let Some(ref cache) = *guard {
+            if let Some(entry) = cache.entries.get(&cache_key) {
+                debug_log!("bazel", "Cache hit for {} ({} flags)", verb, flags.len());
+                return Ok(entry.canonical_flags.clone());
+            }
+        }
+    }
+
     let mut cmd = Command::new("bazel");
     cmd.current_dir(workspace);
     cmd.arg("canonicalize-flags");
     cmd.arg(format!("--for_command={}", verb));
+    cmd.arg("--");
     cmd.args(&flags);
 
     debug_log!("bazel", "Running: {:?}", cmd);
@@ -265,6 +381,16 @@ pub fn canonicalize_flags(
         .lines()
         .map(|s| s.to_string())
         .collect();
+
+    {
+        let mut guard = FLAGS_CACHE.lock().unwrap();
+        if let Some(ref mut cache) = *guard {
+            cache.entries.insert(cache_key, FlagsCacheEntry {
+                canonical_flags: canonical.clone(),
+            });
+            save_flags_cache(workspace, cache);
+        }
+    }
 
     Ok(canonical)
 }
