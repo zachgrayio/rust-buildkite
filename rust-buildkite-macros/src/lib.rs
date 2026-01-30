@@ -3087,10 +3087,12 @@ impl DynamicValue {
         }
     }
 
+    #[cfg(feature = "bazel")]
     fn is_dynamic(&self) -> bool {
         !matches!(self, DynamicValue::Literal(_))
     }
 
+    #[cfg(feature = "bazel")]
     fn as_literal(&self) -> Option<&str> {
         match self {
             DynamicValue::Literal(s) => Some(s),
@@ -3922,8 +3924,31 @@ impl CommandStepDef {
 
         let cmd_value = self.command.as_ref().expect("command must be set");
 
-        let cmd_string = cmd_value.get_command_string();
-        let cmd_tokens = quote! { #cmd_string.to_string() };
+
+        let cmd_tokens = match &cmd_value.0 {
+            #[cfg(feature = "bazel")]
+            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                let flags_tokens = match flags {
+                    Some(dv) => dv.to_tokens(),
+                    None if !extra_flags.is_empty() => {
+                        let joined = extra_flags.join(" ");
+                        quote! { #joined }
+                    }
+                    None => quote! { "" },
+                };
+                let target_tokens = match target {
+                    Some(dv) => dv.to_tokens(),
+                    None => quote! { "" },
+                };
+                quote! {
+                    format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                }
+            }
+            _ => {
+                let cmd_string = cmd_value.get_command_string();
+                quote! { #cmd_string.to_string() }
+            }
+        };
 
         let label_tokens = if let Some(label) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#label.to_string()))) }
@@ -4469,8 +4494,30 @@ impl CommandStepDef {
             .collect();
 
         let cmd_value = self.command.as_ref().expect("command must be set");
-        let cmd_string = cmd_value.get_command_string();
-        let cmd_tokens = quote! { #cmd_string.to_string() };
+        let cmd_tokens = match &cmd_value.0 {
+            #[cfg(feature = "bazel")]
+            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                let flags_tokens = match flags {
+                    Some(dv) => dv.to_tokens(),
+                    None if !extra_flags.is_empty() => {
+                        let joined = extra_flags.join(" ");
+                        quote! { #joined }
+                    }
+                    None => quote! { "" },
+                };
+                let target_tokens = match target {
+                    Some(dv) => dv.to_tokens(),
+                    None => quote! { "" },
+                };
+                quote! {
+                    format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                }
+            }
+            _ => {
+                let cmd_string = cmd_value.get_command_string();
+                quote! { #cmd_string.to_string() }
+            }
+        };
 
         let label_tokens = if let Some(l) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#l.to_string()))) }
