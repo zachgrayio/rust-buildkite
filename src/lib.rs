@@ -101,6 +101,44 @@
 //! };
 //! ```
 //!
+//! # Conditional Expressions
+//!
+//! Buildkite `if` conditions are validated at compile time:
+//!
+//! ```no_run
+//! use rust_buildkite::pipeline;
+//!
+//! let p = pipeline! {
+//!     steps: [
+//!         // Branch conditions
+//!         command(cmd!("echo deploy"))
+//!             .label("Deploy")
+//!             .key("deploy")
+//!             .r#if("build.branch == 'main'"),
+//!
+//!         // Regex matching
+//!         command(cmd!("echo feature"))
+//!             .key("feature")
+//!             .r#if("build.branch =~ /^feature\\//"),
+//!
+//!         // Logical operators
+//!         command(cmd!("echo prod"))
+//!             .key("prod")
+//!             .r#if("build.branch == 'main' && build.state == 'passed'"),
+//!
+//!         // Environment functions
+//!         command(cmd!("echo ci"))
+//!             .key("ci")
+//!             .r#if("env('CI') == 'true'"),
+//!     ]
+//! };
+//! ```
+//!
+//! Invalid conditions produce compile errors:
+//! - Unknown references (e.g., `unknown.field`)
+//! - Invalid regex patterns
+//! - Syntax errors in expressions
+//!
 
 // nb: re-export required because the pipeline macro needs this for the unconstrainted raw json
 // allowed in fields like env, retry, plugins, etc. maybe can clean those types up later.

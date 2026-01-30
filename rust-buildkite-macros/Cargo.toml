@@ -13,6 +13,7 @@ quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 
 bashrs = "6.53"
+regex = "1.10"
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 
