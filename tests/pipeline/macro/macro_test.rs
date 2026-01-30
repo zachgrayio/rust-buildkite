@@ -116,6 +116,84 @@ mod object_literal {
     }
 
     #[test]
+    fn default_plugins_applied_to_all_command_steps() {
+        let pipeline = pipeline! {
+            default_plugins: [
+                { "vault-secrets#v2.4.0": { server: "https://vault.example.com", path: "secret/ci" } }
+            ],
+            steps: [
+                command {
+                    command: cmd!("npm install"),
+                    label: "install"
+                },
+                command {
+                    command: cmd!("npm test"),
+                    label: "test"
+                },
+                wait,
+                command {
+                    command: cmd!("npm run deploy"),
+                    label: "deploy"
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        let count = yaml.matches("vault-secrets#v2.4.0").count();
+        assert_eq!(
+            count, 3,
+            "vault-secrets plugin should be applied to all 3 command steps"
+        );
+        assert!(yaml.contains("https://vault.example.com"));
+    }
+
+    #[test]
+    fn default_plugins_merged_with_step_plugins() {
+        let pipeline = pipeline! {
+            default_plugins: [
+                { "vault-secrets#v2.4.0": { server: "https://vault.example.com" } }
+            ],
+            steps: [
+                command {
+                    command: cmd!("npm test"),
+                    label: "test",
+                    plugins: [
+                        { "docker#v5.0.0": { image: "node:18" } }
+                    ]
+                }
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("vault-secrets#v2.4.0"));
+        assert!(yaml.contains("docker#v5.0.0"));
+    }
+
+    #[test]
+    fn default_plugins_not_applied_to_non_command_steps() {
+        let pipeline = pipeline! {
+            default_plugins: [
+                { "vault-secrets#v2.4.0": { server: "https://vault.example.com" } }
+            ],
+            steps: [
+                command {
+                    command: cmd!("npm test"),
+                    label: "test"
+                },
+                wait,
+                block("Deploy to production?")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        let count = yaml.matches("vault-secrets#v2.4.0").count();
+        assert_eq!(
+            count, 1,
+            "vault-secrets plugin should only be applied to command step"
+        );
+    }
+
+    #[test]
     fn command_with_timeout_parallelism_artifacts() {
         let pipeline = pipeline! {
             steps: [

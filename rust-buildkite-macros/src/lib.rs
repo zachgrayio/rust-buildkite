@@ -446,6 +446,7 @@ struct PipelineDef {
     image: Option<String>,
     secrets: Option<SecretsValue>,
     priority: Option<i64>,
+    default_plugins: Vec<NestedValue>,
 }
 
 impl Parse for PipelineDef {
@@ -461,6 +462,7 @@ impl Parse for PipelineDef {
         let mut image = None;
         let mut secrets = None;
         let mut priority = None;
+        let mut default_plugins = Vec::new();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -677,6 +679,17 @@ impl Parse for PipelineDef {
                     let lit: syn::LitInt = input.parse()?;
                     priority = Some(lit.base10_parse()?);
                 }
+                "default_plugins" => {
+                    let content;
+                    bracketed!(content in input);
+                    while !content.is_empty() {
+                        let plugin = NestedValue::parse(&content)?;
+                        default_plugins.push(plugin);
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -702,6 +715,7 @@ impl Parse for PipelineDef {
             image,
             secrets,
             priority,
+            default_plugins,
         })
     }
 }
@@ -751,7 +765,7 @@ impl PipelineDef {
         let step_tokens: Vec<TokenStream2> = self
             .steps
             .iter()
-            .map(|s| s.to_token_stream())
+            .map(|s| s.to_tokens_with_default_plugins(&self.default_plugins))
             .collect();
         let env_tokens = if let Some(env_vars) = &self.env {
             let env_inserts: Vec<TokenStream2> = env_vars
@@ -2344,6 +2358,35 @@ impl StepDef {
             }
         }
     }
+
+    /// Generate tokens for this step with default plugins merged in
+    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+        match self {
+            StepDef::Command(c) => c.to_tokens_with_default_plugins(default_plugins),
+            StepDef::Wait(w) => w.to_tokens_inner(),
+            StepDef::Block(b) => b.to_tokens_inner(),
+            StepDef::Input(i) => i.to_tokens_inner(),
+            StepDef::Trigger(t) => t.to_tokens_inner(),
+            StepDef::Group(g) => g.to_tokens_with_default_plugins(default_plugins),
+        }
+    }
+
+    /// Generate tokens for this step as a GroupStepsItem with default plugins
+    fn to_group_step_tokens_with_default_plugins(
+        &self,
+        default_plugins: &[NestedValue],
+    ) -> TokenStream2 {
+        match self {
+            StepDef::Command(c) => c.to_group_step_tokens_with_default_plugins(default_plugins),
+            StepDef::Wait(w) => w.to_group_step_tokens(),
+            StepDef::Block(b) => b.to_group_step_tokens(),
+            StepDef::Input(i) => i.to_group_step_tokens(),
+            StepDef::Trigger(t) => t.to_group_step_tokens(),
+            StepDef::Group(_) => {
+                quote! { compile_error!("Groups cannot be nested inside other groups") }
+            }
+        }
+    }
 }
 #[derive(Default)]
 struct WaitStepDef {
@@ -3079,6 +3122,301 @@ impl CommandStepDef {
         }
     }
 
+    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+        if default_plugins.is_empty() {
+            return self.to_tokens_inner();
+        }
+
+        let all_plugins: Vec<&NestedValue> = default_plugins
+            .iter()
+            .chain(self.plugins.iter())
+            .collect();
+
+        let cmd_value = self.command.as_ref().expect("command must be set");
+
+        let cmd_tokens = match &cmd_value.0 {
+            #[cfg(feature = "bazel")]
+            CommandSource::RuntimeBazel {
+                base_cmd,
+                flags_expr,
+                target,
+            } => {
+                quote! {
+                    format!("bazel {} {} {}", #base_cmd, #flags_expr, #target)
+                }
+            }
+            _ => {
+                let cmd_string = cmd_value.get_command_string();
+                quote! { #cmd_string.to_string() }
+            }
+        };
+
+        let label_tokens = if let Some(label) = &self.label {
+            quote! { .label(Some(::rust_buildkite::Label(#label.to_string()))) }
+        } else {
+            quote! {}
+        };
+
+        let key_tokens = if let Some((key, _)) = &self.key {
+            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        } else {
+            quote! {}
+        };
+
+        let depends_on_tokens = if !self.depends_on.is_empty() {
+            let deps: Vec<_> = self.depends_on.iter().map(|(d, _)| d).collect();
+            quote! {
+                .depends_on(Some(::rust_buildkite::DependsOn::DependsOnList(
+                    ::rust_buildkite::DependsOnList(vec![
+                        #(::rust_buildkite::DependsOnListItem::String(#deps.to_string())),*
+                    ])
+                )))
+            }
+        } else {
+            quote! {}
+        };
+
+        let timeout_tokens = if let Some(timeout) = &self.timeout_in_minutes {
+            quote! { .timeout_in_minutes(Some(::std::num::NonZeroU64::new(#timeout).expect("timeout must be > 0"))) }
+        } else {
+            quote! {}
+        };
+
+        let soft_fail_tokens = if self.soft_fail {
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
+        } else {
+            quote! {}
+        };
+
+        let parallelism_tokens = if let Some(p) = &self.parallelism {
+            quote! { .parallelism(Some(#p)) }
+        } else {
+            quote! {}
+        };
+
+        let artifact_tokens = if !self.artifact_paths.is_empty() {
+            let paths = &self.artifact_paths;
+            quote! {
+                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
+                    #(#paths.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let env_tokens = if !self.env.is_empty() {
+            let env_inserts: Vec<TokenStream2> = self
+                .env
+                .iter()
+                .map(|(k, v)| {
+                    quote! {
+                        __step_env.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string()));
+                    }
+                })
+                .collect();
+
+            quote! {
+                .env({
+                    let mut __step_env = ::rust_buildkite::serde_json::Map::new();
+                    #(#env_inserts)*
+                    Some(::rust_buildkite::Env(__step_env))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let agents_tokens = if !self.agents.is_empty() {
+            let agent_inserts: Vec<TokenStream2> = self
+                .agents
+                .iter()
+                .map(|(k, v)| {
+                    quote! {
+                        __step_agents.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string()));
+                    }
+                })
+                .collect();
+
+            quote! {
+                .agents({
+                    let mut __step_agents = ::rust_buildkite::serde_json::Map::new();
+                    #(#agent_inserts)*
+                    Some(::rust_buildkite::Agents::Object(::rust_buildkite::AgentsObject(__step_agents)))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let branches_tokens = if !self.branches.is_empty() {
+            let branches = &self.branches;
+            quote! {
+                .branches(Some(::rust_buildkite::Branches::Array(vec![
+                    #(#branches.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let if_tokens = if let Some(condition) = &self.if_condition {
+            quote! { .if_(Some(::rust_buildkite::If(#condition.to_string()))) }
+        } else {
+            quote! {}
+        };
+
+        let cache_tokens = if !self.cache.is_empty() {
+            let paths = &self.cache;
+            quote! {
+                .cache(Some(::rust_buildkite::Cache::Array(vec![
+                    #(#paths.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let retry_tokens = if let Some(retry) = &self.retry {
+            let automatic_tokens = if let Some(auto) = &retry.automatic {
+                let auto_json = auto.to_json_tokens();
+                quote! {
+                    __retry_obj.insert("automatic".to_string(), #auto_json);
+                }
+            } else {
+                quote! {}
+            };
+            let manual_tokens = if let Some(manual) = &retry.manual {
+                let manual_json = manual.to_json_tokens();
+                quote! {
+                    __retry_obj.insert("manual".to_string(), #manual_json);
+                }
+            } else {
+                quote! {}
+            };
+            quote! {
+                .retry({
+                    let mut __retry_obj = ::rust_buildkite::serde_json::Map::new();
+                    #automatic_tokens
+                    #manual_tokens
+                    let __retry_value = ::rust_buildkite::serde_json::Value::Object(__retry_obj);
+                    Some(::rust_buildkite::serde_json::from_value(__retry_value).expect("invalid retry config"))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let plugins_tokens = {
+            let plugin_values: Vec<TokenStream2> =
+                all_plugins.iter().map(|p| p.to_json_tokens()).collect();
+            quote! {
+                .plugins({
+                    let __plugins_array = vec![#(#plugin_values),*];
+                    Some(::rust_buildkite::Plugins::List(
+                        ::rust_buildkite::PluginsList(__plugins_array.into_iter().map(|v| {
+                            ::rust_buildkite::serde_json::from_value(v).expect("invalid plugin")
+                        }).collect())
+                    ))
+                })
+            }
+        };
+
+        let notify_tokens = if !self.notify.is_empty() {
+            let notify_values: Vec<TokenStream2> =
+                self.notify.iter().map(|n| n.to_json_tokens()).collect();
+            quote! {
+                .notify({
+                    let __notify_array = vec![#(#notify_values),*];
+                    Some(::rust_buildkite::CommandStepNotify(__notify_array.into_iter().map(|v| {
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
+                    }).collect()))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let matrix_tokens = if let Some(matrix) = &self.matrix {
+            let matrix_json = matrix.to_json_tokens();
+            quote! {
+                .matrix({
+                    let __matrix_value = #matrix_json;
+                    Some(::rust_buildkite::serde_json::from_value(__matrix_value).expect("invalid matrix"))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let concurrency_tokens = if let Some(c) = &self.concurrency {
+            quote! { .concurrency(Some(#c)) }
+        } else {
+            quote! {}
+        };
+
+        let concurrency_group_tokens = if let Some(group) = &self.concurrency_group {
+            quote! { .concurrency_group(Some(#group.to_string())) }
+        } else {
+            quote! {}
+        };
+
+        let skip_tokens = match &self.skip {
+            Some(SkipValue::Bool(true)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(true))) }
+            }
+            Some(SkipValue::Bool(false)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(false))) }
+            }
+            Some(SkipValue::Reason(reason)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::String(#reason.parse().expect("invalid skip reason")))) }
+            }
+            None => quote! {},
+        };
+
+        let priority_tokens = if let Some(p) = &self.priority {
+            quote! { .priority(Some(::rust_buildkite::Priority(#p))) }
+        } else {
+            quote! {}
+        };
+
+        let allow_dependency_failure_tokens = if self.allow_dependency_failure {
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
+        } else {
+            quote! {}
+        };
+
+        quote! {
+            ::rust_buildkite::PipelineStepsItem::CommandStep(
+                ::rust_buildkite::CommandStep::builder()
+                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #label_tokens
+                    #key_tokens
+                    #depends_on_tokens
+                    #timeout_tokens
+                    #soft_fail_tokens
+                    #parallelism_tokens
+                    #artifact_tokens
+                    #env_tokens
+                    #agents_tokens
+                    #branches_tokens
+                    #if_tokens
+                    #cache_tokens
+                    #retry_tokens
+                    #plugins_tokens
+                    #notify_tokens
+                    #matrix_tokens
+                    #concurrency_tokens
+                    #concurrency_group_tokens
+                    #skip_tokens
+                    #priority_tokens
+                    #allow_dependency_failure_tokens
+                    .try_into()
+                    .expect("command step construction failed")
+            )
+        }
+    }
+
     fn to_group_step_tokens(&self) -> TokenStream2 {
         let cmd_value = self.command.as_ref().expect("command must be set");
         let cmd_string = cmd_value.get_command_string();
@@ -3248,6 +3586,288 @@ impl CommandStepDef {
 
         let notify_tokens = if !self.notify.is_empty() {
             let notify_values: Vec<TokenStream2> = self.notify.iter().map(|n| n.to_json_tokens()).collect();
+            quote! {
+                .notify({
+                    let __notify_array = vec![#(#notify_values),*];
+                    Some(::rust_buildkite::CommandStepNotify(__notify_array.into_iter().map(|v| {
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
+                    }).collect()))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let matrix_tokens = if let Some(matrix) = &self.matrix {
+            let matrix_json = matrix.to_json_tokens();
+            quote! {
+                .matrix({
+                    let __matrix_value = #matrix_json;
+                    Some(::rust_buildkite::serde_json::from_value(__matrix_value).expect("invalid matrix"))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let concurrency_tokens = if let Some(c) = &self.concurrency {
+            quote! { .concurrency(Some(#c)) }
+        } else {
+            quote! {}
+        };
+
+        let concurrency_group_tokens = if let Some(group) = &self.concurrency_group {
+            quote! { .concurrency_group(Some(#group.to_string())) }
+        } else {
+            quote! {}
+        };
+
+        let skip_tokens = match &self.skip {
+            Some(SkipValue::Bool(true)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(true))) }
+            }
+            Some(SkipValue::Bool(false)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(false))) }
+            }
+            Some(SkipValue::Reason(reason)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::String(#reason.parse().expect("invalid skip reason")))) }
+            }
+            None => quote! {},
+        };
+
+        let priority_tokens = if let Some(p) = &self.priority {
+            quote! { .priority(Some(::rust_buildkite::Priority(#p))) }
+        } else {
+            quote! {}
+        };
+
+        let allow_dependency_failure_tokens = if self.allow_dependency_failure {
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
+        } else {
+            quote! {}
+        };
+
+        quote! {
+            ::rust_buildkite::GroupStepsItem::CommandStep(
+                ::rust_buildkite::CommandStep::builder()
+                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #label_tokens
+                    #key_tokens
+                    #depends_on_tokens
+                    #timeout_tokens
+                    #soft_fail_tokens
+                    #parallelism_tokens
+                    #artifact_tokens
+                    #env_tokens
+                    #agents_tokens
+                    #branches_tokens
+                    #if_tokens
+                    #cache_tokens
+                    #retry_tokens
+                    #plugins_tokens
+                    #notify_tokens
+                    #matrix_tokens
+                    #concurrency_tokens
+                    #concurrency_group_tokens
+                    #skip_tokens
+                    #priority_tokens
+                    #allow_dependency_failure_tokens
+                    .try_into()
+                    .expect("command step construction failed")
+            )
+        }
+    }
+
+    /// Generate tokens for GroupStepsItem::CommandStep with default plugins merged
+    fn to_group_step_tokens_with_default_plugins(
+        &self,
+        default_plugins: &[NestedValue],
+    ) -> TokenStream2 {
+        if default_plugins.is_empty() {
+            return self.to_group_step_tokens();
+        }
+
+        let all_plugins: Vec<&NestedValue> = default_plugins
+            .iter()
+            .chain(self.plugins.iter())
+            .collect();
+
+        let cmd_value = self.command.as_ref().expect("command must be set");
+        let cmd_string = cmd_value.get_command_string();
+        let cmd_tokens = quote! { #cmd_string.to_string() };
+
+        let label_tokens = if let Some(l) = &self.label {
+            quote! { .label(Some(::rust_buildkite::Label(#l.to_string()))) }
+        } else {
+            quote! {}
+        };
+
+        let key_tokens = if let Some((key, _)) = &self.key {
+            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        } else {
+            quote! {}
+        };
+
+        let depends_on_tokens = if !self.depends_on.is_empty() {
+            let deps: Vec<_> = self.depends_on.iter().map(|(d, _)| d).collect();
+            quote! {
+                .depends_on(Some(::rust_buildkite::DependsOn::DependsOnList(
+                    ::rust_buildkite::DependsOnList(vec![
+                        #(::rust_buildkite::DependsOnListItem::String(#deps.to_string())),*
+                    ])
+                )))
+            }
+        } else {
+            quote! {}
+        };
+
+        let timeout_tokens = if let Some(t) = &self.timeout_in_minutes {
+            quote! { .timeout_in_minutes(Some(#t)) }
+        } else {
+            quote! {}
+        };
+
+        let soft_fail_tokens = if self.soft_fail {
+            quote! { .soft_fail(Some(::rust_buildkite::SoftFail::Boolean(true))) }
+        } else {
+            quote! {}
+        };
+
+        let parallelism_tokens = if let Some(p) = &self.parallelism {
+            quote! { .parallelism(Some(#p)) }
+        } else {
+            quote! {}
+        };
+
+        let artifact_tokens = if !self.artifact_paths.is_empty() {
+            let paths: Vec<_> = self.artifact_paths.iter().collect();
+            quote! {
+                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
+                    #(#paths.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let env_tokens = if !self.env.is_empty() {
+            let inserts: Vec<TokenStream2> = self
+                .env
+                .iter()
+                .map(|(k, v)| {
+                    quote! { __env_map.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
+                })
+                .collect();
+            quote! {
+                .env({
+                    let mut __env_map = ::rust_buildkite::serde_json::Map::new();
+                    #(#inserts)*
+                    Some(::rust_buildkite::Env(__env_map))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let agents_tokens = if !self.agents.is_empty() {
+            let inserts: Vec<TokenStream2> = self
+                .agents
+                .iter()
+                .map(|(k, v)| {
+                    quote! { __agents_map.insert(#k.to_string(), ::rust_buildkite::serde_json::Value::String(#v.to_string())); }
+                })
+                .collect();
+            quote! {
+                .agents({
+                    let mut __agents_map = ::rust_buildkite::serde_json::Map::new();
+                    #(#inserts)*
+                    Some(::rust_buildkite::Agents::Object(::rust_buildkite::AgentsObject(__agents_map)))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let branches_tokens = if !self.branches.is_empty() {
+            let branches: Vec<_> = self.branches.iter().collect();
+            quote! {
+                .branches(Some(::rust_buildkite::Branches::Array(vec![
+                    #(#branches.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let if_tokens = if let Some(condition) = &self.if_condition {
+            quote! { .if_(Some(::rust_buildkite::If(#condition.to_string()))) }
+        } else {
+            quote! {}
+        };
+
+        let cache_tokens = if !self.cache.is_empty() {
+            let paths: Vec<_> = self.cache.iter().collect();
+            quote! {
+                .cache(Some(::rust_buildkite::Cache::Array(vec![
+                    #(#paths.to_string()),*
+                ])))
+            }
+        } else {
+            quote! {}
+        };
+
+        let retry_tokens = if let Some(retry) = &self.retry {
+            let automatic_tokens = if let Some(auto) = &retry.automatic {
+                let auto_json = auto.to_json_tokens();
+                quote! {
+                    .automatic({
+                        let __auto_value = #auto_json;
+                        Some(::rust_buildkite::serde_json::from_value(__auto_value).expect("invalid automatic retry config"))
+                    })
+                }
+            } else {
+                quote! {}
+            };
+            let manual_tokens = if let Some(manual) = &retry.manual {
+                let manual_json = manual.to_json_tokens();
+                quote! {
+                    .manual({
+                        let __manual_value = #manual_json;
+                        Some(::rust_buildkite::serde_json::from_value(__manual_value).expect("invalid manual retry config"))
+                    })
+                }
+            } else {
+                quote! {}
+            };
+            quote! {
+                .retry(Some(
+                    ::rust_buildkite::CommandStepRetry::builder()
+                        #automatic_tokens
+                        #manual_tokens
+                        .try_into()
+                        .expect("invalid retry config")
+                ))
+            }
+        } else {
+            quote! {}
+        };
+
+        let plugins_tokens = {
+            let plugin_values: Vec<TokenStream2> =
+                all_plugins.iter().map(|p| p.to_json_tokens()).collect();
+            quote! {
+                .plugins({
+                    let __plugins_array = vec![#(#plugin_values),*];
+                    Some(::rust_buildkite::Plugins::List(::rust_buildkite::PluginsList(__plugins_array.into_iter().map(|v| {
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid plugin")
+                    }).collect())))
+                })
+            }
+        };
+
+        let notify_tokens = if !self.notify.is_empty() {
+            let notify_values: Vec<TokenStream2> =
+                self.notify.iter().map(|n| n.to_json_tokens()).collect();
             quote! {
                 .notify({
                     let __notify_array = vec![#(#notify_values),*];
@@ -4309,6 +4929,97 @@ impl GroupStepDef {
 
         let notify_tokens = if !self.notify.is_empty() {
             let notify_values: Vec<TokenStream2> = self.notify.iter().map(|n| n.to_json_tokens()).collect();
+            quote! {
+                .notify({
+                    let __notify_array = vec![#(#notify_values),*];
+                    Some(::rust_buildkite::BuildNotify(__notify_array.into_iter().map(|v| {
+                        ::rust_buildkite::serde_json::from_value(v).expect("invalid notify")
+                    }).collect()))
+                })
+            }
+        } else {
+            quote! {}
+        };
+
+        let allow_dependency_failure_tokens = if self.allow_dependency_failure {
+            quote! { .allow_dependency_failure(Some(::rust_buildkite::AllowDependencyFailure(true))) }
+        } else {
+            quote! {}
+        };
+
+        quote! {
+            ::rust_buildkite::PipelineStepsItem::GroupStep(
+                ::rust_buildkite::GroupStep::builder()
+                    .group(Some(#label.to_string()))
+                    #key_tokens
+                    #depends_on_tokens
+                    #steps_tokens
+                    #if_tokens
+                    #skip_tokens
+                    #notify_tokens
+                    #allow_dependency_failure_tokens
+                    .try_into()
+                    .expect("group step construction failed")
+            )
+        }
+    }
+
+    /// Generate tokens with default plugins applied to nested steps
+    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+        let label = self.label.as_ref().expect("group label must be set");
+
+        let key_tokens = if let Some((key, _)) = &self.key {
+            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        } else {
+            quote! {}
+        };
+
+        let depends_on_tokens = if !self.depends_on.is_empty() {
+            let deps: Vec<_> = self.depends_on.iter().map(|(d, _)| d).collect();
+            quote! {
+                .depends_on(Some(::rust_buildkite::DependsOn::DependsOnList(
+                    ::rust_buildkite::DependsOnList(vec![
+                        #(::rust_buildkite::DependsOnListItem::String(#deps.to_string())),*
+                    ])
+                )))
+            }
+        } else {
+            quote! {}
+        };
+
+        let nested_steps: Vec<TokenStream2> = self
+            .steps
+            .iter()
+            .map(|s| s.to_group_step_tokens_with_default_plugins(default_plugins))
+            .collect();
+        let steps_tokens = quote! {
+            .steps(::rust_buildkite::GroupSteps(vec![
+                #(#nested_steps),*
+            ]))
+        };
+
+        let if_tokens = if let Some(condition) = &self.if_condition {
+            quote! { .if_(Some(::rust_buildkite::If(#condition.to_string()))) }
+        } else {
+            quote! {}
+        };
+
+        let skip_tokens = match &self.skip {
+            Some(SkipValue::Bool(true)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(true))) }
+            }
+            Some(SkipValue::Bool(false)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::Boolean(false))) }
+            }
+            Some(SkipValue::Reason(reason)) => {
+                quote! { .skip(Some(::rust_buildkite::Skip::String(#reason.parse().expect("invalid skip reason")))) }
+            }
+            None => quote! {},
+        };
+
+        let notify_tokens = if !self.notify.is_empty() {
+            let notify_values: Vec<TokenStream2> =
+                self.notify.iter().map(|n| n.to_json_tokens()).collect();
             quote! {
                 .notify({
                     let __notify_array = vec![#(#notify_values),*];
