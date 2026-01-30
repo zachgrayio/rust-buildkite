@@ -18,5 +18,8 @@ fn ui_tests() {
     {
         t.compile_fail("tests/ui/bazel_empty_command.rs");
         t.compile_fail("tests/ui/bazel_invalid_verb.rs");
+        t.compile_fail("tests/ui/bazel_invalid_target_pattern.rs");
+        t.pass("tests/ui/bazel_comptime_const.rs");
+        t.pass("tests/ui/bazel_runtime_skips_validation.rs");
     }
 }

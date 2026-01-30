@@ -147,7 +147,7 @@ pub use serde_json;
 pub use rust_buildkite_macros::{cmd, pipeline};
 
 #[cfg(feature = "bazel")]
-pub use rust_buildkite_macros::bazel;
+pub use rust_buildkite_macros::{bazel, comptime, runtime};
 
 /// Discovers all available commands from the host machine's PATH at compile time.
 ///
@@ -217,3 +217,16 @@ pub mod webhook;
 pub use client::{Client, ClientBuilder, Response, ResponseExt};
 pub use types::*;
 pub use webhook::*;
+
+/// Define a compile-time constant. Code runs at build time via crabtime.
+#[macro_export]
+macro_rules! define_comptime {
+    ($name:ident, $body:block) => {
+        #[crabtime::function]
+        fn $name() {
+            let __value: String = $body;
+            crabtime::output_str!("const {}: &str = \"{}\";", stringify!($name), __value);
+        }
+        $name!();
+    };
+}

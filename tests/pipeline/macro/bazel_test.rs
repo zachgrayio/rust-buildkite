@@ -1,6 +1,7 @@
 #![cfg(feature = "bazel")]
+#![allow(unused_imports)]
 
-use rust_buildkite::{bazel, pipeline};
+use rust_buildkite::{bazel, comptime, pipeline, runtime};
 
 mod bazel_macro {
     use super::*;
@@ -380,6 +381,388 @@ mod target_patterns {
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("-- //... -//foo:bar -//baz:qux"));
     }
+
+    #[test]
+    fn dynamic_target_from_variable() {
+        let targets = "//foo:bar //baz:qux";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: runtime!(targets),
+                    label: "build dynamic targets",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:bar"));
+        assert!(yaml.contains("//baz:qux"));
+    }
+
+    #[test]
+    fn dynamic_target_from_format() {
+        let package = "foo";
+        let target = "bar";
+        let targets = format!("//{}:{}", package, target);
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: runtime!(targets),
+                    label: "build formatted target",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:bar"));
+    }
+
+    #[test]
+    fn dynamic_target_with_static_flags() {
+        let targets = "//...";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: runtime!(targets),
+                    flags: "--test_output=errors",
+                    label: "test with dynamic targets",
+                    key: "test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//..."));
+        assert!(yaml.contains("--test_output=errors"));
+    }
+
+    #[test]
+    fn both_dynamic_flags_and_targets() {
+        let targets = "//foo:bar";
+        let flags = "--jobs=4";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: runtime!(targets),
+                    flags: runtime!(flags),
+                    label: "build with both dynamic",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:bar"));
+        assert!(yaml.contains("--jobs=4"));
+    }
+
+    #[test]
+    fn comptime_target_from_const() {
+        const TARGETS: &str = "//foo:bar //baz:qux";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TARGETS),
+                    label: "build comptime targets",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:bar"));
+        assert!(yaml.contains("//baz:qux"));
+    }
+
+    #[test]
+    fn comptime_target_from_static() {
+        static TARGETS: &str = "//lib:core";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: comptime!(TARGETS),
+                    label: "test comptime targets",
+                    key: "test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//lib:core"));
+    }
+
+    #[test]
+    fn comptime_with_concat() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(concat!("//foo", ":bar")),
+                    label: "build concat target",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:bar"));
+    }
+
+    #[test]
+    fn comptime_flags_from_const() {
+        const FLAGS: &str = "--jobs=8 --verbose_failures";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: comptime!(FLAGS),
+                    label: "build with comptime flags",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=8"));
+        assert!(yaml.contains("--verbose_failures"));
+    }
+
+    #[test]
+    fn comptime_both_targets_and_flags() {
+        const TARGETS: &str = "//app:main //lib:core";
+        const FLAGS: &str = "--compilation_mode=opt";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TARGETS),
+                    flags: comptime!(FLAGS),
+                    label: "build optimized",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//app:main"));
+        assert!(yaml.contains("//lib:core"));
+        assert!(yaml.contains("--compilation_mode=opt"));
+    }
+
+    #[test]
+    fn mixed_comptime_targets_runtime_flags() {
+        const TARGETS: &str = "//...";
+        let jobs = "4";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TARGETS),
+                    flags: runtime!(format!("--jobs={}", jobs)),
+                    label: "mixed comptime/runtime",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//..."));
+        assert!(yaml.contains("--jobs=4"));
+    }
+}
+
+mod comptime_flags {
+    use super::*;
+
+    #[test]
+    fn flags_from_const() {
+        const FLAGS: &str = "--jobs=8 --verbose_failures";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: comptime!(FLAGS),
+                    label: "build with comptime flags",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=8"));
+        assert!(yaml.contains("--verbose_failures"));
+    }
+
+    #[test]
+    fn flags_from_concat() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: comptime!(concat!("--jobs=", "4")),
+                    label: "build with concat flags",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=4"));
+    }
+
+    #[test]
+    fn both_comptime() {
+        const TARGETS: &str = "//app:main //lib:core";
+        const FLAGS: &str = "--compilation_mode=opt";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TARGETS),
+                    flags: comptime!(FLAGS),
+                    label: "build optimized",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//app:main"));
+        assert!(yaml.contains("//lib:core"));
+        assert!(yaml.contains("--compilation_mode=opt"));
+    }
+
+    #[test]
+    fn mixed_comptime_runtime() {
+        const TARGETS: &str = "//...";
+        let jobs = "4";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TARGETS),
+                    flags: runtime!(format!("--jobs={}", jobs)),
+                    label: "mixed comptime/runtime",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//..."));
+        assert!(yaml.contains("--jobs=4"));
+    }
+}
+
+mod comptime_define {
+    use super::*;
+    use rust_buildkite::define_comptime;
+
+    define_comptime!(TEST_TARGETS, {
+        vec!["//tests:unit", "//tests:integration", "//tests:e2e"].join(" ")
+    });
+
+    define_comptime!(BUILD_FLAGS, {
+        vec!["--jobs=8", "--verbose_failures", "--keep_going"].join(" ")
+    });
+
+    define_comptime!(COMPUTED_PARALLELISM, {
+        let cpus = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        format!("--jobs={}", cpus)
+    });
+
+    define_comptime!(AFFECTED_TARGETS, {
+        "//app:main //lib:core //tests:affected".to_string()
+    });
+
+    #[test]
+    fn crabtime_targets() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: comptime!(TEST_TARGETS),
+                    label: "test crabtime targets",
+                    key: "test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//tests:unit"));
+        assert!(yaml.contains("//tests:integration"));
+        assert!(yaml.contains("//tests:e2e"));
+    }
+
+    #[test]
+    fn crabtime_flags() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: comptime!(BUILD_FLAGS),
+                    label: "build with crabtime flags",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=8"));
+        assert!(yaml.contains("--verbose_failures"));
+        assert!(yaml.contains("--keep_going"));
+    }
+
+    #[test]
+    fn crabtime_computed_value() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    flags: comptime!(COMPUTED_PARALLELISM),
+                    label: "build with computed parallelism",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs="));
+    }
+
+    #[test]
+    fn crabtime_both_targets_and_flags() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: comptime!(TEST_TARGETS),
+                    flags: comptime!(BUILD_FLAGS),
+                    label: "full crabtime example",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//tests:unit"));
+        assert!(yaml.contains("--jobs=8"));
+    }
+
+    #[test]
+    fn crabtime_with_function_call() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: comptime!(AFFECTED_TARGETS),
+                    label: "test affected targets",
+                    key: "test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//app:main"));
+        assert!(yaml.contains("//lib:core"));
+        assert!(yaml.contains("//tests:affected"));
+    }
 }
 
 mod step_options {
@@ -402,6 +785,71 @@ mod step_options {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("CC: clang"));
+    }
+
+    #[test]
+    fn with_env_comptime() {
+        const COMPILER: &str = "clang-15";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build",
+                    env: {
+                        CC: comptime!(COMPILER)
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("CC: clang-15"));
+    }
+
+    #[test]
+    fn with_env_runtime() {
+        let compiler = "gcc".to_string();
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build",
+                    env: {
+                        CC: runtime!(compiler)
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("CC: gcc"));
+    }
+
+    #[test]
+    fn with_env_mixed() {
+        const VERSION: &str = "18";
+        let debug_level = "2";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    label: "build",
+                    key: "build",
+                    env: {
+                        CC: "clang",
+                        CC_VERSION: comptime!(VERSION),
+                        DEBUG_LEVEL: runtime!(debug_level)
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("CC: clang"));
+        assert!(yaml.contains("CC_VERSION: '18'"));
+        assert!(yaml.contains("DEBUG_LEVEL: '2'"));
     }
 
     #[test]
