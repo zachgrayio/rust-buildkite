@@ -1045,3 +1045,116 @@ mod complex {
         assert!(yaml.contains("group:"));
     }
 }
+
+mod if_conditions {
+    use super::*;
+
+    #[test]
+    fn simple_branch_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo deploy"),
+                    label: "Deploy",
+                    key: "deploy",
+                    r#if: "build.branch == 'main'"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn regex_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    label: "Test",
+                    key: "test",
+                    r#if: "build.branch =~ /^feature\\//"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn logical_and_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo deploy"),
+                    label: "Deploy",
+                    key: "deploy",
+                    r#if: "build.branch == 'main' && build.state == 'passed'"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn env_function_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    label: "Test",
+                    key: "test",
+                    r#if: "env('CI') == 'true'"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn negation_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    label: "Test",
+                    key: "test",
+                    r#if: "!build.pull_request.draft"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn group_with_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                group("Deploy")
+                    .key("deploy-group")
+                    .r#if("build.branch == 'main'")
+                    .steps([
+                        command(cmd!("echo deploy")).key("deploy")
+                    ])
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+
+    #[test]
+    fn trigger_with_condition() {
+        let pipeline = pipeline! {
+            steps: [
+                trigger("downstream-pipeline")
+                    .key("trigger-downstream")
+                    .r#if("build.branch == 'main'")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("if:"));
+    }
+}

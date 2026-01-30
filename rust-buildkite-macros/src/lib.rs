@@ -6,6 +6,8 @@
 //! Shell commands are validated using [bashrs](https://docs.rs/bashrs) for
 //! proper parsing and linting at compile time.
 
+mod buildkite_conditional;
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
@@ -1248,6 +1250,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = args.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "cache" => {
@@ -1459,6 +1467,12 @@ impl StepDef {
                 }
                 "condition" | "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "cache" => {
@@ -1580,6 +1594,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition.value());
                 }
                 other => {
@@ -1634,6 +1654,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = args.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "prompt" => {
@@ -1734,6 +1760,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "prompt" => {
@@ -1803,6 +1835,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = args.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "prompt" => {
@@ -1903,6 +1941,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "prompt" => {
@@ -2015,6 +2059,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = args.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "skip" => {
@@ -2139,6 +2189,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "skip" => {
@@ -2212,6 +2268,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = args.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "skip" => {
@@ -2291,6 +2353,12 @@ impl StepDef {
                 }
                 "if" => {
                     let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
                     step.if_condition = Some(condition);
                 }
                 "skip" => {
@@ -3145,22 +3213,8 @@ impl CommandStepDef {
 
         let cmd_value = self.command.as_ref().expect("command must be set");
 
-        let cmd_tokens = match &cmd_value.0 {
-            #[cfg(feature = "bazel")]
-            CommandSource::RuntimeBazel {
-                base_cmd,
-                flags_expr,
-                target,
-            } => {
-                quote! {
-                    format!("bazel {} {} {}", #base_cmd, #flags_expr, #target)
-                }
-            }
-            _ => {
-                let cmd_string = cmd_value.get_command_string();
-                quote! { #cmd_string.to_string() }
-            }
-        };
+        let cmd_string = cmd_value.get_command_string();
+        let cmd_tokens = quote! { #cmd_string.to_string() };
 
         let label_tokens = if let Some(label) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#label.to_string()))) }
