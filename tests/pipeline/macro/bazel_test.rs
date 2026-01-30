@@ -651,56 +651,36 @@ mod comptime_flags {
     }
 }
 
-mod comptime_define {
+mod comptime_shell_tests {
     use super::*;
-    use rust_buildkite::define_comptime;
-
-    define_comptime!(TEST_TARGETS, {
-        vec!["//tests:unit", "//tests:integration", "//tests:e2e"].join(" ")
-    });
-
-    define_comptime!(BUILD_FLAGS, {
-        vec!["--jobs=8", "--verbose_failures", "--keep_going"].join(" ")
-    });
-
-    define_comptime!(COMPUTED_PARALLELISM, {
-        let cpus = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4);
-        format!("--jobs={}", cpus)
-    });
-
-    define_comptime!(AFFECTED_TARGETS, {
-        "//app:main //lib:core //tests:affected".to_string()
-    });
+    use rust_buildkite::comptime_shell;
 
     #[test]
-    fn crabtime_targets() {
+    fn shell_echo_targets() {
         let p = pipeline! {
             env: {},
             steps: [
                 bazel_test {
-                    target_patterns: comptime!(TEST_TARGETS),
-                    label: "test crabtime targets",
+                    target_patterns: comptime_shell!("echo '//tests:unit //tests:e2e'"),
+                    label: "test shell targets",
                     key: "test"
                 }
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("//tests:unit"));
-        assert!(yaml.contains("//tests:integration"));
         assert!(yaml.contains("//tests:e2e"));
     }
 
     #[test]
-    fn crabtime_flags() {
+    fn shell_flags() {
         let p = pipeline! {
             env: {},
             steps: [
                 bazel_build {
                     target_patterns: "//...",
-                    flags: comptime!(BUILD_FLAGS),
-                    label: "build with crabtime flags",
+                    flags: comptime_shell!("echo '--jobs=8 --verbose_failures'"),
+                    label: "build with shell flags",
                     key: "build"
                 }
             ]
@@ -708,17 +688,16 @@ mod comptime_define {
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("--jobs=8"));
         assert!(yaml.contains("--verbose_failures"));
-        assert!(yaml.contains("--keep_going"));
     }
 
     #[test]
-    fn crabtime_computed_value() {
+    fn shell_computed_value() {
         let p = pipeline! {
             env: {},
             steps: [
                 bazel_build {
                     target_patterns: "//...",
-                    flags: comptime!(COMPUTED_PARALLELISM),
+                    flags: comptime_shell!("echo --jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu)"),
                     label: "build with computed parallelism",
                     key: "build"
                 }
@@ -729,39 +708,21 @@ mod comptime_define {
     }
 
     #[test]
-    fn crabtime_both_targets_and_flags() {
+    fn shell_both_targets_and_flags() {
         let p = pipeline! {
             env: {},
             steps: [
                 bazel_build {
-                    target_patterns: comptime!(TEST_TARGETS),
-                    flags: comptime!(BUILD_FLAGS),
-                    label: "full crabtime example",
+                    target_patterns: comptime_shell!("echo '//app:main //lib:core'"),
+                    flags: comptime_shell!("echo '--keep_going'"),
+                    label: "full shell example",
                     key: "build"
                 }
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(yaml.contains("//tests:unit"));
-        assert!(yaml.contains("--jobs=8"));
-    }
-
-    #[test]
-    fn crabtime_with_function_call() {
-        let p = pipeline! {
-            env: {},
-            steps: [
-                bazel_test {
-                    target_patterns: comptime!(AFFECTED_TARGETS),
-                    label: "test affected targets",
-                    key: "test"
-                }
-            ]
-        };
-        let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("//app:main"));
-        assert!(yaml.contains("//lib:core"));
-        assert!(yaml.contains("//tests:affected"));
+        assert!(yaml.contains("--keep_going"));
     }
 }
 

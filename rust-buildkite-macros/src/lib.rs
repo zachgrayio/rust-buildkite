@@ -3043,11 +3043,43 @@ impl DynamicValue {
 
     fn from_expr(expr: syn::Expr) -> Self {
         if let syn::Expr::Macro(ref mac) = expr {
-            let macro_name = mac.mac.path.segments.last()
+            let macro_name = mac
+                .mac
+                .path
+                .segments
+                .last()
                 .map(|s| s.ident.to_string());
             match macro_name.as_deref() {
                 Some("comptime") => DynamicValue::Comptime(expr),
                 Some("runtime") => DynamicValue::Runtime(expr),
+                Some("comptime_shell") => {
+                    if let Ok(cmd) = syn::parse2::<LitStr>(mac.mac.tokens.clone()) {
+                        match std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(cmd.value())
+                            .output()
+                        {
+                            Ok(out) if out.status.success() => {
+                                let stdout =
+                                    String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                DynamicValue::Literal(stdout)
+                            }
+                            Ok(out) => {
+                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                let code = out.status.code().unwrap_or(-1);
+                                panic!(
+                                    "comptime_shell command failed (exit {}): {}",
+                                    code, stderr
+                                );
+                            }
+                            Err(e) => {
+                                panic!("comptime_shell failed to run command: {}", e);
+                            }
+                        }
+                    } else {
+                        panic!("comptime_shell! requires a string literal argument");
+                    }
+                }
                 _ => DynamicValue::Runtime(expr),
             }
         } else {
@@ -6034,7 +6066,7 @@ pub fn bazel(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Marker for compile-time expressions. Use with const values or `define_comptime!`.
+/// Marker for compile-time expressions. Use with const values or `comptime_shell!`.
 #[cfg(feature = "bazel")]
 #[proc_macro]
 pub fn comptime(input: TokenStream) -> TokenStream {
@@ -6046,6 +6078,42 @@ pub fn comptime(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn runtime(input: TokenStream) -> TokenStream {
     input
+}
+
+/// Runs a shell command at compile time, returns stdout as a string literal.
+/// Works with rust-script since proc macros run during compilation.
+#[cfg(feature = "bazel")]
+#[proc_macro]
+pub fn comptime_shell(input: TokenStream) -> TokenStream {
+    let cmd: LitStr = match syn::parse(input) {
+        Ok(lit) => lit,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd.value())
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            quote! { #stdout }.into()
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let code = out.status.code().unwrap_or(-1);
+            Error::new(
+                cmd.span(),
+                format!("Command failed (exit {}): {}", code, stderr),
+            )
+            .to_compile_error()
+            .into()
+        }
+        Err(e) => Error::new(cmd.span(), format!("Failed to run command: {}", e))
+            .to_compile_error()
+            .into(),
+    }
 }
 
 #[cfg(feature = "bazel")]
