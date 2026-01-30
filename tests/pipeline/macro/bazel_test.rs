@@ -906,6 +906,57 @@ mod step_options {
         assert!(yaml.contains("agents:"));
         assert!(yaml.contains("queue: linux"));
     }
+
+    #[test]
+    fn with_plugins() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    label: "test",
+                    key: "test",
+                    plugins: [
+                        { "test-collector#v1.10.1": {
+                            files: "bazel-testlogs/**/test.xml",
+                            format: "junit"
+                        }}
+                    ]
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("plugins:"));
+        assert!(yaml.contains("test-collector#v1.10.1"));
+        assert!(yaml.contains("files: bazel-testlogs/**/test.xml"));
+        assert!(yaml.contains("format: junit"));
+    }
+
+    #[test]
+    fn with_multiple_plugins() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    label: "test",
+                    key: "test",
+                    plugins: [
+                        { "test-collector#v1.10.1": {
+                            files: "bazel-testlogs/**/test.xml",
+                            format: "junit"
+                        }},
+                        { "junit-annotate#v2.4.1": {
+                            artifacts: "test-results/*.xml"
+                        }}
+                    ]
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("test-collector#v1.10.1"));
+        assert!(yaml.contains("junit-annotate#v2.4.1"));
+    }
 }
 
 mod validation_options {

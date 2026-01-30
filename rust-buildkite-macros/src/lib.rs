@@ -1970,6 +1970,17 @@ impl StepDef {
                     let val: syn::LitBool = content.parse()?;
                     step.allow_dependency_failure = val.value();
                 }
+                "plugins" => {
+                    let plugins_content;
+                    bracketed!(plugins_content in content);
+                    while !plugins_content.is_empty() {
+                        let plugin = NestedValue::parse(&plugins_content)?;
+                        step.plugins.push(plugin);
+                        if plugins_content.peek(Token![,]) {
+                            plugins_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
                 other => {
                     return Err(Error::new(
                         field.span(),
@@ -3105,8 +3116,19 @@ impl DynamicValue {
             DynamicValue::Literal(s) => quote! { #s },
             DynamicValue::Comptime(expr) | DynamicValue::Runtime(expr) => {
                 if let syn::Expr::Macro(mac) = expr {
-                    let inner = &mac.mac.tokens;
-                    quote! { #inner }
+                    let macro_name = mac
+                        .mac
+                        .path
+                        .segments
+                        .last()
+                        .map(|s| s.ident.to_string());
+                    match macro_name.as_deref() {
+                        Some("runtime") | Some("comptime") => {
+                            let inner = &mac.mac.tokens;
+                            quote! { #inner }
+                        }
+                        _ => quote! { #expr }
+                    }
                 } else {
                     quote! { #expr }
                 }
