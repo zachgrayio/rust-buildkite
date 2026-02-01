@@ -1158,3 +1158,83 @@ mod if_conditions {
         assert!(yaml.contains("if:"));
     }
 }
+
+mod multiple_commands {
+    use super::*;
+
+    #[test]
+    fn object_literal_commands_array() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("npm install"),
+                        cmd!("npm test"),
+                        cmd!("npm build")
+                    ],
+                    label: "Build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- npm install"));
+        assert!(yaml.contains("- npm test"));
+        assert!(yaml.contains("- npm build"));
+    }
+
+    #[test]
+    fn fluent_chained_commands() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!("npm install"))
+                    .command(cmd!("npm test"))
+                    .label("Test")
+                    .key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- npm install"));
+        assert!(yaml.contains("- npm test"));
+    }
+
+    #[test]
+    fn single_command_uses_command_field() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo hello"),
+                    label: "Hello",
+                    key: "hello"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("command: echo hello"));
+        assert!(!yaml.contains("commands:"));
+    }
+
+    #[test]
+    fn multiple_commands_with_env() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("npm install"),
+                        cmd!("npm test")
+                    ],
+                    label: "Test",
+                    key: "test",
+                    env: {
+                        NODE_ENV: "test"
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("NODE_ENV: test"));
+    }
+}

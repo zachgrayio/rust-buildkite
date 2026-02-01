@@ -1444,3 +1444,196 @@ mod pipeline_properties {
         assert!(yaml.contains("bazel test"));
     }
 }
+
+mod multiple_bazel_commands {
+    use super::*;
+
+    #[test]
+    fn commands_array_with_bazel() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel!("build //..."),
+                        bazel!("test //...")
+                    ],
+                    label: "Build and Test",
+                    key: "build_test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- bazel build //..."));
+        assert!(yaml.contains("- bazel test //..."));
+    }
+
+    #[test]
+    fn mixed_cmd_and_bazel() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("echo 'Starting build'"),
+                        bazel!("build //..."),
+                        cmd!("echo 'Build complete'")
+                    ],
+                    label: "Build with logging",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- echo 'Starting build'"));
+        assert!(yaml.contains("- bazel build //..."));
+        assert!(yaml.contains("- echo 'Build complete'"));
+    }
+
+    #[test]
+    fn fluent_chained_bazel() {
+        let p = pipeline! {
+            steps: [
+                command(bazel!("build //..."))
+                    .command(bazel!("test //..."))
+                    .label("Build and Test")
+                    .key("build_test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- bazel build //..."));
+        assert!(yaml.contains("- bazel test //..."));
+    }
+}
+
+mod bazel_commands_step {
+    use super::*;
+
+    #[test]
+    fn basic_bazel_commands() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_build { target_patterns: "//app:main" },
+                        bazel_test { target_patterns: "//app:test" }
+                    ],
+                    label: "Build and Test",
+                    key: "build_test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- bazel build //app:main"));
+        assert!(yaml.contains("- bazel test //app:test"));
+        assert!(yaml.contains("label: Build and Test"));
+        assert!(yaml.contains("key: build_test"));
+    }
+
+    #[test]
+    fn bazel_commands_with_flags() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_build {
+                            target_patterns: "//...",
+                            flags: "--jobs=8 --verbose_failures"
+                        },
+                        bazel_test {
+                            target_patterns: "//...",
+                            flags: ["--test_output=errors", "--jobs=4"]
+                        }
+                    ],
+                    label: "Full Build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=8"));
+        assert!(yaml.contains("--verbose_failures"));
+        assert!(yaml.contains("--test_output=errors"));
+    }
+
+    #[test]
+    fn bazel_commands_with_env() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_build { target_patterns: "//..." }
+                    ],
+                    label: "Build",
+                    env: {
+                        BAZEL_CACHE: "remote"
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("BAZEL_CACHE: remote"));
+    }
+
+    #[test]
+    fn bazel_commands_with_depends_on() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo setup"),
+                    key: "setup"
+                },
+                bazel_commands {
+                    commands: [
+                        bazel_build { target_patterns: "//..." }
+                    ],
+                    label: "Build",
+                    key: "build",
+                    depends_on: ["setup"]
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("depends_on:"));
+        assert!(yaml.contains("- setup"));
+    }
+
+    #[test]
+    fn bazel_commands_multiple_verbs() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_build { target_patterns: "//..." },
+                        bazel_test { target_patterns: "//..." },
+                        bazel_run { target_patterns: "//tools:deploy" }
+                    ],
+                    label: "Full Pipeline"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("- bazel build //..."));
+        assert!(yaml.contains("- bazel test //..."));
+        assert!(yaml.contains("- bazel run //tools:deploy"));
+    }
+
+    #[test]
+    fn bazel_commands_with_generic_verb() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_command { verb: "info" },
+                        bazel_build { target_patterns: "//..." }
+                    ],
+                    label: "Info and Build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("- bazel info"));
+        assert!(yaml.contains("- bazel build //..."));
+    }
+}

@@ -953,7 +953,7 @@ impl PipelineDef {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
-                    if let Some((cmd_name, span)) = cmd_step.get_command_name() {
+                    for (cmd_name, span) in cmd_step.get_command_names() {
                         // Skip path-based commands - they're validated by validate_paths()
                         // Paths start with /, ./ or contain / (relative paths like dir/script.sh)
                         if cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/') {
@@ -990,7 +990,7 @@ impl PipelineDef {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
-                    if let Some((cmd_name, span)) = cmd_step.get_command_name() {
+                    for (cmd_name, span) in cmd_step.get_command_names() {
                         // Check paths: absolute (/path), explicit relative (./path), or implicit relative (dir/path)
                         if cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/') {
                             if let Err(e) = CmdExpr::validate_path_exists(&cmd_name, allow_missing) {
@@ -1052,7 +1052,7 @@ impl PipelineDef {
                         step_allowed.insert(name.clone());
                     }
                     
-                    if let Some(cmd_value) = &cmd_step.command {
+                    for cmd_value in &cmd_step.commands {
                         let span = cmd_value.span();
                         let undefined_vars = cmd_value.get_undefined_vars();
                         
@@ -1179,6 +1179,7 @@ impl StepDef {
             "bazel_cquery" => Self::parse_bazel_command_step(input, Some("cquery"), ident.span(), custom_verbs),
             "bazel_aquery" => Self::parse_bazel_command_step(input, Some("aquery"), ident.span(), custom_verbs),
             "bazel_coverage" => Self::parse_bazel_command_step(input, Some("coverage"), ident.span(), custom_verbs),
+            "bazel_commands" => Self::parse_bazel_commands_step(input, ident.span(), custom_verbs),
             other if other.starts_with("bazel_") => {
                 let verb = other.strip_prefix("bazel_").unwrap();
                 if custom_verbs.iter().any(|v| v == verb) {
@@ -1196,7 +1197,7 @@ impl StepDef {
             other => Err(Error::new(
                 ident.span(),
                 format!(
-                    "unknown step type: '{}'. Expected: command, wait, block, input, trigger, group, bazel_command, bazel_build, bazel_test, bazel_run",
+                    "unknown step type: '{}'. Expected: command, wait, block, input, trigger, group, bazel_command, bazel_build, bazel_test, bazel_run, bazel_commands",
                     other
                 ),
             )),
@@ -1386,6 +1387,43 @@ impl StepDef {
                     let var_value = DynamicValue::parse(&args)?;
                     step.env.push((var_name.to_string(), var_value));
                 }
+                "command" => {
+                    // Add another command to the step
+                    let ident: Ident = args.parse()?;
+                    if ident == "cmd" || ident == "bazel" {
+                        args.parse::<Token![!]>()?;
+                        let cmd_content;
+                        syn::parenthesized!(cmd_content in args);
+                        let lit: LitStr = cmd_content.parse().map_err(|_| {
+                            Error::new(
+                                cmd_content.span(),
+                                "cmd! requires a string literal"
+                            )
+                        })?;
+                        if ident == "cmd" {
+                            let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                            step.commands.push(CommandValue::from_cmd(cmd_expr));
+                        } else {
+                            #[cfg(feature = "bazel")]
+                            {
+                                let bazel_expr = BazelExpr::from_lit_str(&lit, false, false, &[])?;
+                                step.commands.push(CommandValue::from_bazel(bazel_expr));
+                            }
+                            #[cfg(not(feature = "bazel"))]
+                            {
+                                return Err(Error::new(
+                                    ident.span(),
+                                    "bazel! requires the 'bazel' feature"
+                                ));
+                            }
+                        }
+                    } else {
+                        return Err(Error::new(
+                            ident.span(),
+                            format!("expected cmd!(\"...\") or bazel!(\"...\"), got '{}'", ident),
+                        ));
+                    }
+                }
                 "timeout_in_minutes" => {
                     let timeout: syn::LitInt = args.parse()?;
                     step.timeout_in_minutes = Some(timeout);
@@ -1544,12 +1582,12 @@ impl StepDef {
                             })?;
                             if ident == "cmd" {
                                 let cmd_expr = CmdExpr::from_lit_str(&lit)?;
-                                step.command = Some(CommandValue::from_cmd(cmd_expr));
+                                step.commands.push(CommandValue::from_cmd(cmd_expr));
                             } else {
                                 #[cfg(feature = "bazel")]
                                 {
                                     let bazel_expr = BazelExpr::from_lit_str(&lit, false, false, &[])?;
-                                    step.command = Some(CommandValue::from_bazel(bazel_expr));
+                                    step.commands.push(CommandValue::from_bazel(bazel_expr));
                                 }
                                 #[cfg(not(feature = "bazel"))]
                                 {
@@ -1577,6 +1615,56 @@ impl StepDef {
                             content.span(),
                             "expected cmd!(\"...\")"
                         ));
+                    }
+                }
+                "commands" => {
+                    let cmds_content;
+                    bracketed!(cmds_content in content);
+                    while !cmds_content.is_empty() {
+                        if cmds_content.peek(Ident) {
+                            let ident: Ident = cmds_content.parse()?;
+                            if ident == "cmd" || ident == "bazel" {
+                                cmds_content.parse::<Token![!]>()?;
+                                let cmd_content;
+                                syn::parenthesized!(cmd_content in cmds_content);
+                                let lit: LitStr = cmd_content.parse().map_err(|_| {
+                                    Error::new(
+                                        cmd_content.span(),
+                                        "cmd! requires a string literal"
+                                    )
+                                })?;
+                                if ident == "cmd" {
+                                    let cmd_expr = CmdExpr::from_lit_str(&lit)?;
+                                    step.commands.push(CommandValue::from_cmd(cmd_expr));
+                                } else {
+                                    #[cfg(feature = "bazel")]
+                                    {
+                                        let bazel_expr = BazelExpr::from_lit_str(&lit, false, false, &[])?;
+                                        step.commands.push(CommandValue::from_bazel(bazel_expr));
+                                    }
+                                    #[cfg(not(feature = "bazel"))]
+                                    {
+                                        return Err(Error::new(
+                                            ident.span(),
+                                            "bazel! requires the 'bazel' feature"
+                                        ));
+                                    }
+                                }
+                            } else {
+                                return Err(Error::new(
+                                    ident.span(),
+                                    format!("expected cmd!(\"...\") or bazel!(\"...\"), got '{}'", ident),
+                                ));
+                            }
+                        } else {
+                            return Err(Error::new(
+                                cmds_content.span(),
+                                "expected cmd!(\"...\") in commands array"
+                            ));
+                        }
+                        if cmds_content.peek(Token![,]) {
+                            cmds_content.parse::<Token![,]>()?;
+                        }
                     }
                 }
                 "label" => {
@@ -1754,10 +1842,10 @@ impl StepDef {
                 content.parse::<Token![,]>()?;
             }
         }
-        if step.command.is_none() {
+        if step.commands.is_empty() {
             return Err(Error::new(
                 input.span(),
-                "command step requires 'command' field",
+                "command step requires 'command' or 'commands' field",
             ));
         }
 
@@ -2001,7 +2089,7 @@ impl StepDef {
             || flags_value.as_ref().map_or(false, |f| f.is_dynamic());
 
         if has_dynamic {
-            step.command = Some(CommandValue::from_dynamic_bazel(
+            step.commands.push(CommandValue::from_dynamic_bazel(
                 verb.clone(),
                 flags_value,
                 extra_flags.clone(),
@@ -2047,7 +2135,331 @@ impl StepDef {
             let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
             all_custom_verbs.extend(step_custom_verbs);
             let bazel_expr = BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
-            step.command = Some(CommandValue::from_bazel(bazel_expr));
+            step.commands.push(CommandValue::from_bazel(bazel_expr));
+        }
+
+        Ok(StepDef::Command(step))
+    }
+
+    /// Parse bazel_commands step with multiple nested bazel commands:
+    /// bazel_commands {
+    ///     commands: [
+    ///         bazel_build { target_patterns: "//app:main" },
+    ///         bazel_test { target_patterns: "//app:test" }
+    ///     ],
+    ///     label: "Build and Test",
+    ///     key: "build_test"
+    /// }
+    #[cfg(feature = "bazel")]
+    fn parse_bazel_commands_step(
+        input: ParseStream,
+        step_span: proc_macro2::Span,
+        pipeline_custom_verbs: &[String],
+    ) -> Result<Self> {
+        let content;
+        braced!(content in input);
+
+        let mut step = CommandStepDef::new_empty();
+        let mut step_custom_verbs: Vec<String> = Vec::new();
+        let mut validate_targets = true;
+        let mut dry_run = false;
+
+        while !content.is_empty() {
+            let field: Ident = content.parse()?;
+            content.parse::<Token![:]>()?;
+
+            match strip_raw_ident(&field.to_string()) {
+                "commands" => {
+                    let cmds_content;
+                    bracketed!(cmds_content in content);
+                    while !cmds_content.is_empty() {
+                        let cmd_ident: Ident = cmds_content.parse()?;
+                        let cmd_name = cmd_ident.to_string();
+                        
+                        let verb = if cmd_name == "bazel_command" {
+                            None
+                        } else if let Some(v) = cmd_name.strip_prefix("bazel_") {
+                            Some(v.to_string())
+                        } else {
+                            return Err(Error::new(
+                                cmd_ident.span(),
+                                format!("Expected bazel_build, bazel_test, etc. Got '{}'", cmd_name),
+                            ));
+                        };
+
+                        let cmd_content;
+                        braced!(cmd_content in cmds_content);
+                        
+                        let mut cmd_verb = verb;
+                        let mut target_patterns: Option<DynamicValue> = None;
+                        let mut target_patterns_span: Option<proc_macro2::Span> = None;
+                        let mut flags_value: Option<DynamicValue> = None;
+                        let mut extra_flags: Vec<String> = Vec::new();
+                        let mut cmd_validate_targets = validate_targets;
+                        let mut cmd_dry_run = dry_run;
+
+                        while !cmd_content.is_empty() {
+                            let cmd_field: Ident = cmd_content.parse()?;
+                            cmd_content.parse::<Token![:]>()?;
+
+                            match strip_raw_ident(&cmd_field.to_string()) {
+                                "verb" => {
+                                    if cmd_verb.is_some() {
+                                        return Err(Error::new(
+                                            cmd_field.span(),
+                                            "verb cannot be specified when using bazel_build, bazel_test, etc.",
+                                        ));
+                                    }
+                                    let v: LitStr = cmd_content.parse()?;
+                                    cmd_verb = Some(v.value());
+                                }
+                                "target_patterns" => {
+                                    target_patterns_span = Some(cmd_field.span());
+                                    target_patterns = Some(DynamicValue::parse(&cmd_content)?);
+                                }
+                                "flags" => {
+                                    if cmd_content.peek(syn::token::Bracket) {
+                                        let flags_content;
+                                        bracketed!(flags_content in cmd_content);
+                                        while !flags_content.is_empty() {
+                                            let flag: LitStr = flags_content.parse()?;
+                                            extra_flags.push(flag.value());
+                                            if flags_content.peek(Token![,]) {
+                                                flags_content.parse::<Token![,]>()?;
+                                            }
+                                        }
+                                    } else {
+                                        flags_value = Some(DynamicValue::parse(&cmd_content)?);
+                                    }
+                                }
+                                "validate_targets" => {
+                                    let val: syn::LitBool = cmd_content.parse()?;
+                                    cmd_validate_targets = val.value();
+                                }
+                                "dry_run" => {
+                                    let val: syn::LitBool = cmd_content.parse()?;
+                                    cmd_dry_run = val.value();
+                                }
+                                other => {
+                                    return Err(Error::new(
+                                        cmd_field.span(),
+                                        format!("unknown bazel command field: {}. Use step-level fields (label, key, etc.) outside the commands array.", other),
+                                    ));
+                                }
+                            }
+                            if cmd_content.peek(Token![,]) {
+                                cmd_content.parse::<Token![,]>()?;
+                            }
+                        }
+
+                        let verb = cmd_verb.ok_or_else(|| {
+                            Error::new(cmd_ident.span(), "bazel_command requires 'verb' field")
+                        })?;
+
+                        let has_dynamic = target_patterns.as_ref().map_or(false, |t| t.is_dynamic())
+                            || flags_value.as_ref().map_or(false, |f| f.is_dynamic());
+
+                        if has_dynamic {
+                            step.commands.push(CommandValue::from_dynamic_bazel(
+                                verb.clone(),
+                                flags_value,
+                                extra_flags.clone(),
+                                target_patterns,
+                            ));
+                        } else {
+                            let target_str = target_patterns.as_ref().and_then(|t| t.as_literal()).map(|s| s.to_string());
+                            
+                            if let Some(ref t) = target_str {
+                                if cmd_validate_targets && !t.is_empty() {
+                                    if let Err(e) = Self::validate_target_patterns(t) {
+                                        return Err(Error::new(target_patterns_span.unwrap_or(step_span), e));
+                                    }
+                                }
+                            }
+
+                            let has_subtraction = target_str.as_ref().map_or(false, |t| {
+                                t.split_whitespace().any(|p| {
+                                    p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
+                                })
+                            });
+
+                            let mut cmd_parts = vec![verb.clone()];
+                            
+                            if let Some(ref fv) = flags_value {
+                                if let Some(flags_str) = fv.as_literal() {
+                                    for flag in flags_str.split_whitespace() {
+                                        cmd_parts.push(flag.to_string());
+                                    }
+                                }
+                            }
+                            cmd_parts.extend(extra_flags.clone());
+                            
+                            if let Some(ref t) = target_str {
+                                if has_subtraction {
+                                    cmd_parts.push("--".to_string());
+                                }
+                                cmd_parts.push(t.clone());
+                            }
+                            let bazel_cmd = cmd_parts.join(" ");
+
+                            let lit = LitStr::new(&bazel_cmd, step_span);
+                            let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
+                            all_custom_verbs.extend(step_custom_verbs.clone());
+                            let bazel_expr = BazelExpr::from_lit_str(&lit, cmd_validate_targets, cmd_dry_run, &all_custom_verbs)?;
+                            step.commands.push(CommandValue::from_bazel(bazel_expr));
+                        }
+
+                        if cmds_content.peek(Token![,]) {
+                            cmds_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "custom_verbs" => {
+                    let verbs_content;
+                    bracketed!(verbs_content in content);
+                    while !verbs_content.is_empty() {
+                        let v: LitStr = verbs_content.parse()?;
+                        step_custom_verbs.push(v.value());
+                        if verbs_content.peek(Token![,]) {
+                            verbs_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "validate_targets" => {
+                    let val: syn::LitBool = content.parse()?;
+                    validate_targets = val.value();
+                }
+                "dry_run" => {
+                    let val: syn::LitBool = content.parse()?;
+                    dry_run = val.value();
+                }
+                "label" => {
+                    step.label = Some(content.parse()?);
+                }
+                "key" => {
+                    let key_lit: LitStr = content.parse()?;
+                    step.key = Some((key_lit.value(), key_lit.span()));
+                }
+                "env" => {
+                    let env_content;
+                    braced!(env_content in content);
+                    while !env_content.is_empty() {
+                        let var_name: Ident = env_content.parse()?;
+                        env_content.parse::<Token![:]>()?;
+                        let var_value = DynamicValue::parse(&env_content)?;
+                        step.env.push((var_name.to_string(), var_value));
+                        if env_content.peek(Token![,]) {
+                            env_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "depends_on" => {
+                    let deps_content;
+                    bracketed!(deps_content in content);
+                    while !deps_content.is_empty() {
+                        let dep: LitStr = deps_content.parse()?;
+                        step.depends_on.push((dep.value(), dep.span()));
+                        if deps_content.peek(Token![,]) {
+                            deps_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "timeout_in_minutes" => {
+                    let timeout: syn::LitInt = content.parse()?;
+                    step.timeout_in_minutes = Some(timeout);
+                }
+                "soft_fail" => {
+                    let val: syn::LitBool = content.parse()?;
+                    step.soft_fail = val.value();
+                }
+                "parallelism" => {
+                    let p: syn::LitInt = content.parse()?;
+                    step.parallelism = Some(p);
+                }
+                "artifact_paths" => {
+                    let paths_content;
+                    bracketed!(paths_content in content);
+                    while !paths_content.is_empty() {
+                        let path: LitStr = paths_content.parse()?;
+                        step.artifact_paths.push(path);
+                        if paths_content.peek(Token![,]) {
+                            paths_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "agents" => {
+                    let agents_content;
+                    braced!(agents_content in content);
+                    while !agents_content.is_empty() {
+                        let agent_key: Ident = agents_content.parse()?;
+                        agents_content.parse::<Token![:]>()?;
+                        let agent_value: LitStr = agents_content.parse()?;
+                        step.agents.push((agent_key.to_string(), agent_value));
+                        if agents_content.peek(Token![,]) {
+                            agents_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "branches" => {
+                    let branches_content;
+                    bracketed!(branches_content in content);
+                    while !branches_content.is_empty() {
+                        let branch: LitStr = branches_content.parse()?;
+                        step.branches.push(branch);
+                        if branches_content.peek(Token![,]) {
+                            branches_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "condition" | "if" => {
+                    let condition: LitStr = content.parse()?;
+                    if let Err(errors) = buildkite_conditional::validate_condition(&condition.value()) {
+                        return Err(Error::new(
+                            condition.span(),
+                            format!("Invalid Buildkite conditional: {}", errors.join("; "))
+                        ));
+                    }
+                    step.if_condition = Some(condition);
+                }
+                "cache" => {
+                    let cache_content;
+                    bracketed!(cache_content in content);
+                    while !cache_content.is_empty() {
+                        let path: LitStr = cache_content.parse()?;
+                        step.cache.push(path);
+                        if cache_content.peek(Token![,]) {
+                            cache_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "plugins" => {
+                    let plugins_content;
+                    bracketed!(plugins_content in content);
+                    while !plugins_content.is_empty() {
+                        let plugin = NestedValue::parse(&plugins_content)?;
+                        step.plugins.push(plugin);
+                        if plugins_content.peek(Token![,]) {
+                            plugins_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                other => {
+                    return Err(Error::new(
+                        field.span(),
+                        format!("unknown bazel_commands step field: {}", other),
+                    ));
+                }
+            }
+            if content.peek(Token![,]) {
+                content.parse::<Token![,]>()?;
+            }
+        }
+
+        if step.commands.is_empty() {
+            return Err(Error::new(
+                step_span,
+                "bazel_commands requires 'commands' field with at least one bazel command",
+            ));
         }
 
         Ok(StepDef::Command(step))
@@ -3253,7 +3665,7 @@ impl CommandValue {
 }
 
 struct CommandStepDef {
-    command: Option<CommandValue>,
+    commands: Vec<CommandValue>,
     label: Option<LitStr>,
     key: Option<(String, proc_macro2::Span)>,
     depends_on: Vec<(String, proc_macro2::Span)>,
@@ -3554,7 +3966,7 @@ impl FieldDef {
 impl CommandStepDef {
     fn new_with_cmd(cmd_expr: CmdExpr) -> Self {
         Self {
-            command: Some(CommandValue::from_cmd(cmd_expr)),
+            commands: vec![CommandValue::from_cmd(cmd_expr)],
             label: None,
             key: None,
             depends_on: Vec::new(),
@@ -3582,7 +3994,7 @@ impl CommandStepDef {
     #[cfg(feature = "bazel")]
     fn new_with_bazel(bazel_expr: BazelExpr) -> Self {
         Self {
-            command: Some(CommandValue::from_bazel(bazel_expr)),
+            commands: vec![CommandValue::from_bazel(bazel_expr)],
             label: None,
             key: None,
             depends_on: Vec::new(),
@@ -3609,7 +4021,7 @@ impl CommandStepDef {
 
     fn new_empty() -> Self {
         Self {
-            command: None,
+            commands: Vec::new(),
             label: None,
             key: None,
             depends_on: Vec::new(),
@@ -3634,36 +4046,48 @@ impl CommandStepDef {
         }
     }
 
-    /// Get the command name for validation (first word of the command)
-    fn get_command_name(&self) -> Option<(String, proc_macro2::Span)> {
-        self.command.as_ref().map(|cv| (cv.get_command_name(), cv.span()))
+    fn get_command_names(&self) -> Vec<(String, proc_macro2::Span)> {
+        self.commands.iter().map(|cv| (cv.get_command_name(), cv.span())).collect()
     }
 
     fn to_tokens_inner(&self) -> TokenStream2 {
-        let cmd_value = self.command.as_ref().expect("command must be set");
+        assert!(!self.commands.is_empty(), "commands must not be empty");
         
-        let cmd_tokens = match &cmd_value.0 {
-            #[cfg(feature = "bazel")]
-            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                let flags_tokens = match flags {
-                    Some(dv) => dv.to_tokens(),
-                    None if !extra_flags.is_empty() => {
-                        let joined = extra_flags.join(" ");
-                        quote! { #joined }
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
+            match &cmd_value.0 {
+                #[cfg(feature = "bazel")]
+                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                    let flags_tokens = match flags {
+                        Some(dv) => dv.to_tokens(),
+                        None if !extra_flags.is_empty() => {
+                            let joined = extra_flags.join(" ");
+                            quote! { #joined }
+                        }
+                        None => quote! { "" },
+                    };
+                    let target_tokens = match target {
+                        Some(dv) => dv.to_tokens(),
+                        None => quote! { "" },
+                    };
+                    quote! {
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
                     }
-                    None => quote! { "" },
-                };
-                let target_tokens = match target {
-                    Some(dv) => dv.to_tokens(),
-                    None => quote! { "" },
-                };
-                quote! {
-                    format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                }
+                _ => {
+                    let cmd_string = cmd_value.get_command_string();
+                    quote! { #cmd_string.to_string() }
                 }
             }
-            _ => {
-                let cmd_string = cmd_value.get_command_string();
-                quote! { #cmd_string.to_string() }
+        }).collect();
+        
+        let command_tokens = if cmd_token_list.len() == 1 {
+            let cmd = &cmd_token_list[0];
+            quote! { .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd))) }
+        } else {
+            quote! {
+                .commands(Some(::rust_buildkite::CommandStepCommand::Array(vec![
+                    #(#cmd_token_list),*
+                ])))
             }
         };
 
@@ -3906,7 +4330,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::PipelineStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #command_tokens
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
@@ -3944,31 +4368,43 @@ impl CommandStepDef {
             .chain(self.plugins.iter())
             .collect();
 
-        let cmd_value = self.command.as_ref().expect("command must be set");
-
-
-        let cmd_tokens = match &cmd_value.0 {
-            #[cfg(feature = "bazel")]
-            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                let flags_tokens = match flags {
-                    Some(dv) => dv.to_tokens(),
-                    None if !extra_flags.is_empty() => {
-                        let joined = extra_flags.join(" ");
-                        quote! { #joined }
+        assert!(!self.commands.is_empty(), "commands must not be empty");
+        
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
+            match &cmd_value.0 {
+                #[cfg(feature = "bazel")]
+                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                    let flags_tokens = match flags {
+                        Some(dv) => dv.to_tokens(),
+                        None if !extra_flags.is_empty() => {
+                            let joined = extra_flags.join(" ");
+                            quote! { #joined }
+                        }
+                        None => quote! { "" },
+                    };
+                    let target_tokens = match target {
+                        Some(dv) => dv.to_tokens(),
+                        None => quote! { "" },
+                    };
+                    quote! {
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
                     }
-                    None => quote! { "" },
-                };
-                let target_tokens = match target {
-                    Some(dv) => dv.to_tokens(),
-                    None => quote! { "" },
-                };
-                quote! {
-                    format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                }
+                _ => {
+                    let cmd_string = cmd_value.get_command_string();
+                    quote! { #cmd_string.to_string() }
                 }
             }
-            _ => {
-                let cmd_string = cmd_value.get_command_string();
-                quote! { #cmd_string.to_string() }
+        }).collect();
+        
+        let command_tokens = if cmd_token_list.len() == 1 {
+            let cmd = &cmd_token_list[0];
+            quote! { .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd))) }
+        } else {
+            quote! {
+                .commands(Some(::rust_buildkite::CommandStepCommand::Array(vec![
+                    #(#cmd_token_list),*
+                ])))
             }
         };
 
@@ -4211,7 +4647,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::PipelineStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #command_tokens
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
@@ -4240,9 +4676,23 @@ impl CommandStepDef {
     }
 
     fn to_group_step_tokens(&self) -> TokenStream2 {
-        let cmd_value = self.command.as_ref().expect("command must be set");
-        let cmd_string = cmd_value.get_command_string();
-        let cmd_tokens = quote! { #cmd_string.to_string() };
+        assert!(!self.commands.is_empty(), "commands must not be empty");
+        
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
+            let cmd_string = cmd_value.get_command_string();
+            quote! { #cmd_string.to_string() }
+        }).collect();
+        
+        let command_tokens = if cmd_token_list.len() == 1 {
+            let cmd = &cmd_token_list[0];
+            quote! { .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd))) }
+        } else {
+            quote! {
+                .commands(Some(::rust_buildkite::CommandStepCommand::Array(vec![
+                    #(#cmd_token_list),*
+                ])))
+            }
+        };
 
         let label_tokens = if let Some(l) = &self.label {
             quote! { .label(Some(::rust_buildkite::Label(#l.to_string()))) }
@@ -4473,7 +4923,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::GroupStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #command_tokens
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
@@ -4515,29 +4965,43 @@ impl CommandStepDef {
             .chain(self.plugins.iter())
             .collect();
 
-        let cmd_value = self.command.as_ref().expect("command must be set");
-        let cmd_tokens = match &cmd_value.0 {
-            #[cfg(feature = "bazel")]
-            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                let flags_tokens = match flags {
-                    Some(dv) => dv.to_tokens(),
-                    None if !extra_flags.is_empty() => {
-                        let joined = extra_flags.join(" ");
-                        quote! { #joined }
+        assert!(!self.commands.is_empty(), "commands must not be empty");
+        
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
+            match &cmd_value.0 {
+                #[cfg(feature = "bazel")]
+                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                    let flags_tokens = match flags {
+                        Some(dv) => dv.to_tokens(),
+                        None if !extra_flags.is_empty() => {
+                            let joined = extra_flags.join(" ");
+                            quote! { #joined }
+                        }
+                        None => quote! { "" },
+                    };
+                    let target_tokens = match target {
+                        Some(dv) => dv.to_tokens(),
+                        None => quote! { "" },
+                    };
+                    quote! {
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
                     }
-                    None => quote! { "" },
-                };
-                let target_tokens = match target {
-                    Some(dv) => dv.to_tokens(),
-                    None => quote! { "" },
-                };
-                quote! {
-                    format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                }
+                _ => {
+                    let cmd_string = cmd_value.get_command_string();
+                    quote! { #cmd_string.to_string() }
                 }
             }
-            _ => {
-                let cmd_string = cmd_value.get_command_string();
-                quote! { #cmd_string.to_string() }
+        }).collect();
+        
+        let command_tokens = if cmd_token_list.len() == 1 {
+            let cmd = &cmd_token_list[0];
+            quote! { .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd))) }
+        } else {
+            quote! {
+                .commands(Some(::rust_buildkite::CommandStepCommand::Array(vec![
+                    #(#cmd_token_list),*
+                ])))
             }
         };
 
@@ -4778,7 +5242,7 @@ impl CommandStepDef {
         quote! {
             ::rust_buildkite::GroupStepsItem::CommandStep(
                 ::rust_buildkite::CommandStep::builder()
-                    .command(Some(::rust_buildkite::CommandStepCommand::String(#cmd_tokens)))
+                    #command_tokens
                     #label_tokens
                     #key_tokens
                     #depends_on_tokens
