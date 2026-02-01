@@ -112,21 +112,20 @@ fn discover_host_path_commands() -> HashSet<String> {
                         {
                             if let Ok(metadata) = path.metadata() {
                                 let mode = metadata.permissions().mode();
-                                if mode & 0o111 != 0 {
-                                    if let Some(name) = path.file_name() {
-                                        if let Some(name_str) = name.to_str() {
-                                            commands.insert(name_str.to_string());
-                                        }
-                                    }
+                                if mode & 0o111 != 0
+                                    && let Some(name) = path.file_name()
+                                    && let Some(name_str) = name.to_str()
+                                {
+                                    commands.insert(name_str.to_string());
                                 }
                             }
                         }
                         #[cfg(not(unix))]
                         {
-                            if let Some(name) = path.file_name() {
-                                if let Some(name_str) = name.to_str() {
-                                    commands.insert(name_str.to_string());
-                                }
+                            if let Some(name) = path.file_name()
+                                && let Some(name_str) = name.to_str()
+                            {
+                                commands.insert(name_str.to_string());
                             }
                         }
                     }
@@ -992,10 +991,10 @@ impl PipelineDef {
                 StepDef::Command(cmd_step) => {
                     for (cmd_name, span) in cmd_step.get_command_names() {
                         // Check paths: absolute (/path), explicit relative (./path), or implicit relative (dir/path)
-                        if cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/') {
-                            if let Err(e) = CmdExpr::validate_path_exists(&cmd_name, allow_missing) {
-                                return Err(Error::new(span, e));
-                            }
+                        if (cmd_name.starts_with('/') || cmd_name.starts_with("./") || cmd_name.contains('/'))
+                            && let Err(e) = CmdExpr::validate_path_exists(&cmd_name, allow_missing)
+                        {
+                            return Err(Error::new(span, e));
                         }
                     }
                 }
@@ -1288,14 +1287,15 @@ impl StepDef {
     }
 
     fn get_key(&self) -> Option<(String, proc_macro2::Span)> {
-        match self {
-            StepDef::Command(c) => c.key.clone(),
-            StepDef::Block(b) => b.key.clone(),
-            StepDef::Input(i) => i.key.clone(),
-            StepDef::Trigger(t) => t.key.clone(),
-            StepDef::Group(g) => g.key.clone(),
+        let key_value = match self {
+            StepDef::Command(c) => c.key.as_ref(),
+            StepDef::Block(b) => b.key.as_ref(),
+            StepDef::Input(i) => i.key.as_ref(),
+            StepDef::Trigger(t) => t.key.as_ref(),
+            StepDef::Group(g) => g.key.as_ref(),
             StepDef::Wait(_) => None,
-        }
+        };
+        key_value.and_then(|kv| kv.as_literal().map(|(s, span)| (s.to_string(), span)))
     }
 
     fn get_depends_on(&self) -> Vec<(String, proc_macro2::Span)> {
@@ -1374,8 +1374,7 @@ impl StepDef {
                     step.label = Some(args.parse()?);
                 }
                 "key" => {
-                    let key_lit: LitStr = args.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&args)?);
                 }
                 "depends_on" => {
                     let dep: LitStr = args.parse()?;
@@ -1671,8 +1670,7 @@ impl StepDef {
                     step.label = Some(content.parse()?);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "env" => {
                     let env_content;
@@ -1919,15 +1917,74 @@ impl StepDef {
                     if content.peek(syn::token::Bracket) {
                         let flags_content;
                         bracketed!(flags_content in content);
+                        let mut flag_parts: Vec<String> = Vec::new();
                         while !flags_content.is_empty() {
                             let flag: LitStr = flags_content.parse()?;
-                            extra_flags.push(flag.value());
+                            flag_parts.push(flag.value());
                             if flags_content.peek(Token![,]) {
                                 flags_content.parse::<Token![,]>()?;
                             }
                         }
+                        let joined = flag_parts.join(" ");
+                        flags_value = Some(DynamicValue::Literal(joined));
                     } else {
                         flags_value = Some(DynamicValue::parse(&content)?);
+                    }
+                }
+                "config" => {
+                    if content.peek(syn::token::Bracket) {
+                        let configs_content;
+                        bracketed!(configs_content in content);
+                        while !configs_content.is_empty() {
+                            let c: LitStr = configs_content.parse()?;
+                            extra_flags.push(format!("--config={}", c.value()));
+                            if configs_content.peek(Token![,]) {
+                                configs_content.parse::<Token![,]>()?;
+                            }
+                        }
+                    } else {
+                        let c: LitStr = content.parse()?;
+                        extra_flags.push(format!("--config={}", c.value()));
+                    }
+                }
+                "compilation_mode" => {
+                    let mode: LitStr = content.parse()?;
+                    extra_flags.push(format!("--compilation_mode={}", mode.value()));
+                }
+                "build_tag_filters" => {
+                    if content.peek(syn::token::Bracket) {
+                        let filters_content;
+                        bracketed!(filters_content in content);
+                        let mut filters: Vec<String> = Vec::new();
+                        while !filters_content.is_empty() {
+                            let f: LitStr = filters_content.parse()?;
+                            filters.push(f.value());
+                            if filters_content.peek(Token![,]) {
+                                filters_content.parse::<Token![,]>()?;
+                            }
+                        }
+                        extra_flags.push(format!("--build_tag_filters={}", filters.join(",")));
+                    } else {
+                        let f: LitStr = content.parse()?;
+                        extra_flags.push(format!("--build_tag_filters={}", f.value()));
+                    }
+                }
+                "test_tag_filters" => {
+                    if content.peek(syn::token::Bracket) {
+                        let filters_content;
+                        bracketed!(filters_content in content);
+                        let mut filters: Vec<String> = Vec::new();
+                        while !filters_content.is_empty() {
+                            let f: LitStr = filters_content.parse()?;
+                            filters.push(f.value());
+                            if filters_content.peek(Token![,]) {
+                                filters_content.parse::<Token![,]>()?;
+                            }
+                        }
+                        extra_flags.push(format!("--test_tag_filters={}", filters.join(",")));
+                    } else {
+                        let f: LitStr = content.parse()?;
+                        extra_flags.push(format!("--test_tag_filters={}", f.value()));
                     }
                 }
                 "validate_targets" => {
@@ -1953,8 +2010,7 @@ impl StepDef {
                     step.label = Some(content.parse()?);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "env" => {
                     let env_content;
@@ -2112,6 +2168,12 @@ impl StepDef {
                 })
             });
 
+            let flags_have_separator = flags_value
+                .as_ref()
+                .and_then(|fv| fv.as_literal())
+                .map_or(false, |s| s.split_whitespace().any(|f| f == "--"))
+                || extra_flags.iter().any(|f| f == "--");
+
             let mut cmd_parts = vec![verb.clone()];
             
             if let Some(ref fv) = flags_value {
@@ -2124,7 +2186,7 @@ impl StepDef {
             cmd_parts.extend(extra_flags.clone());
             
             if let Some(ref t) = target_str {
-                if has_subtraction {
+                if has_subtraction && !flags_have_separator {
                     cmd_parts.push("--".to_string());
                 }
                 cmd_parts.push(t.clone());
@@ -2221,15 +2283,74 @@ impl StepDef {
                                     if cmd_content.peek(syn::token::Bracket) {
                                         let flags_content;
                                         bracketed!(flags_content in cmd_content);
+                                        let mut flag_parts: Vec<String> = Vec::new();
                                         while !flags_content.is_empty() {
                                             let flag: LitStr = flags_content.parse()?;
-                                            extra_flags.push(flag.value());
+                                            flag_parts.push(flag.value());
                                             if flags_content.peek(Token![,]) {
                                                 flags_content.parse::<Token![,]>()?;
                                             }
                                         }
+                                        let joined = flag_parts.join(" ");
+                                        flags_value = Some(DynamicValue::Literal(joined));
                                     } else {
                                         flags_value = Some(DynamicValue::parse(&cmd_content)?);
+                                    }
+                                }
+                                "config" => {
+                                    if cmd_content.peek(syn::token::Bracket) {
+                                        let configs_content;
+                                        bracketed!(configs_content in cmd_content);
+                                        while !configs_content.is_empty() {
+                                            let c: LitStr = configs_content.parse()?;
+                                            extra_flags.push(format!("--config={}", c.value()));
+                                            if configs_content.peek(Token![,]) {
+                                                configs_content.parse::<Token![,]>()?;
+                                            }
+                                        }
+                                    } else {
+                                        let c: LitStr = cmd_content.parse()?;
+                                        extra_flags.push(format!("--config={}", c.value()));
+                                    }
+                                }
+                                "compilation_mode" => {
+                                    let mode: LitStr = cmd_content.parse()?;
+                                    extra_flags.push(format!("--compilation_mode={}", mode.value()));
+                                }
+                                "build_tag_filters" => {
+                                    if cmd_content.peek(syn::token::Bracket) {
+                                        let filters_content;
+                                        bracketed!(filters_content in cmd_content);
+                                        let mut filters: Vec<String> = Vec::new();
+                                        while !filters_content.is_empty() {
+                                            let f: LitStr = filters_content.parse()?;
+                                            filters.push(f.value());
+                                            if filters_content.peek(Token![,]) {
+                                                filters_content.parse::<Token![,]>()?;
+                                            }
+                                        }
+                                        extra_flags.push(format!("--build_tag_filters={}", filters.join(",")));
+                                    } else {
+                                        let f: LitStr = cmd_content.parse()?;
+                                        extra_flags.push(format!("--build_tag_filters={}", f.value()));
+                                    }
+                                }
+                                "test_tag_filters" => {
+                                    if cmd_content.peek(syn::token::Bracket) {
+                                        let filters_content;
+                                        bracketed!(filters_content in cmd_content);
+                                        let mut filters: Vec<String> = Vec::new();
+                                        while !filters_content.is_empty() {
+                                            let f: LitStr = filters_content.parse()?;
+                                            filters.push(f.value());
+                                            if filters_content.peek(Token![,]) {
+                                                filters_content.parse::<Token![,]>()?;
+                                            }
+                                        }
+                                        extra_flags.push(format!("--test_tag_filters={}", filters.join(",")));
+                                    } else {
+                                        let f: LitStr = cmd_content.parse()?;
+                                        extra_flags.push(format!("--test_tag_filters={}", f.value()));
                                     }
                                 }
                                 "validate_targets" => {
@@ -2283,6 +2404,12 @@ impl StepDef {
                                 })
                             });
 
+                            let flags_have_separator = flags_value
+                                .as_ref()
+                                .and_then(|fv| fv.as_literal())
+                                .map_or(false, |s| s.split_whitespace().any(|f| f == "--"))
+                                || extra_flags.iter().any(|f| f == "--");
+
                             let mut cmd_parts = vec![verb.clone()];
                             
                             if let Some(ref fv) = flags_value {
@@ -2295,7 +2422,7 @@ impl StepDef {
                             cmd_parts.extend(extra_flags.clone());
                             
                             if let Some(ref t) = target_str {
-                                if has_subtraction {
+                                if has_subtraction && !flags_have_separator {
                                     cmd_parts.push("--".to_string());
                                 }
                                 cmd_parts.push(t.clone());
@@ -2337,8 +2464,7 @@ impl StepDef {
                     step.label = Some(content.parse()?);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "env" => {
                     let env_content;
@@ -2526,8 +2652,7 @@ impl StepDef {
 
             match strip_raw_ident(&method.to_string()) {
                 "key" => {
-                    let key_lit: LitStr = args.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&args)?);
                 }
                 "depends_on" => {
                     let dep: LitStr = args.parse()?;
@@ -2595,8 +2720,7 @@ impl StepDef {
                     step.prompt = Some(prompt);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "depends_on" => {
                     let deps_content;
@@ -2707,8 +2831,7 @@ impl StepDef {
 
             match strip_raw_ident(&method.to_string()) {
                 "key" => {
-                    let key_lit: LitStr = args.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&args)?);
                 }
                 "depends_on" => {
                     let dep: LitStr = args.parse()?;
@@ -2776,8 +2899,7 @@ impl StepDef {
                     step.prompt = Some(prompt);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "depends_on" => {
                     let deps_content;
@@ -2888,8 +3010,7 @@ impl StepDef {
 
             match strip_raw_ident(&method.to_string()) {
                 "key" => {
-                    let key_lit: LitStr = args.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&args)?);
                 }
                 "depends_on" => {
                     let dep: LitStr = args.parse()?;
@@ -3006,8 +3127,7 @@ impl StepDef {
                     step.label = Some(content.parse()?);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "async" => {
                     let val: syn::LitBool = content.parse()?;
@@ -3134,7 +3254,7 @@ impl StepDef {
     fn parse_group_fluent(input: ParseStream) -> Result<Self> {
         let content;
         syn::parenthesized!(content in input);
-        let label: LitStr = content.parse()?;
+        let label: syn::Expr = content.parse()?;
         let mut step = GroupStepDef::new(label);
 
         while input.peek(Token![.]) {
@@ -3145,8 +3265,7 @@ impl StepDef {
 
             match strip_raw_ident(&method.to_string()) {
                 "key" => {
-                    let key_lit: LitStr = args.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&args)?);
                 }
                 "depends_on" => {
                     let dep: LitStr = args.parse()?;
@@ -3219,12 +3338,11 @@ impl StepDef {
 
             match strip_raw_ident(&field.to_string()) {
                 "group" => {
-                    let label: LitStr = content.parse()?;
+                    let label: syn::Expr = content.parse()?;
                     step.label = Some(label);
                 }
                 "key" => {
-                    let key_lit: LitStr = content.parse()?;
-                    step.key = Some((key_lit.value(), key_lit.span()));
+                    step.key = Some(KeyValue::parse(&content)?);
                 }
                 "depends_on" => {
                     let deps_content;
@@ -3549,6 +3667,56 @@ impl DynamicValue {
     }
 }
 
+/// Key value that can be literal (validated) or runtime (not validated).
+#[derive(Clone)]
+enum KeyValue {
+    Literal(String, proc_macro2::Span),
+    Runtime(syn::Expr),
+}
+
+impl KeyValue {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let span = input.span();
+        if input.peek(LitStr) {
+            let lit: LitStr = input.parse()?;
+            Ok(KeyValue::Literal(lit.value(), lit.span()))
+        } else {
+            let expr: syn::Expr = input.parse()?;
+            if let syn::Expr::Macro(ref mac) = expr {
+                let macro_name = mac.mac.path.segments.last().map(|s| s.ident.to_string());
+                if macro_name.as_deref() == Some("runtime") {
+                    return Ok(KeyValue::Runtime(expr));
+                }
+            }
+            Err(syn::Error::new(
+                span,
+                "key must be a string literal or runtime!(expr)",
+            ))
+        }
+    }
+
+    fn as_literal(&self) -> Option<(&str, proc_macro2::Span)> {
+        match self {
+            KeyValue::Literal(s, span) => Some((s, *span)),
+            KeyValue::Runtime(_) => None,
+        }
+    }
+
+    fn to_tokens(&self) -> TokenStream2 {
+        match self {
+            KeyValue::Literal(s, _) => quote! { #s.to_string() },
+            KeyValue::Runtime(expr) => {
+                if let syn::Expr::Macro(mac) = expr {
+                    let inner = &mac.mac.tokens;
+                    quote! { #inner.to_string() }
+                } else {
+                    quote! { #expr.to_string() }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CommandValue(CommandSource);
 
@@ -3591,7 +3759,8 @@ impl CommandValue {
                     Some(_) => "<dynamic-targets>".to_string(),
                     None => String::new(),
                 };
-                format!("bazel {} {} {}", base_cmd.trim(), flags_str, target_str).trim().to_string()
+                format!("bazel {} {} {}", base_cmd.trim(), flags_str, target_str)
+                    .split_whitespace().collect::<Vec<_>>().join(" ")
             }
         }
     }
@@ -3666,8 +3835,8 @@ impl CommandValue {
 
 struct CommandStepDef {
     commands: Vec<CommandValue>,
-    label: Option<LitStr>,
-    key: Option<(String, proc_macro2::Span)>,
+    label: Option<syn::Expr>,
+    key: Option<KeyValue>,
     depends_on: Vec<(String, proc_macro2::Span)>,
     env: Vec<(String, DynamicValue)>,
     timeout_in_minutes: Option<syn::LitInt>,
@@ -4070,7 +4239,8 @@ impl CommandStepDef {
                         None => quote! { "" },
                     };
                     quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                            .split_whitespace().collect::<Vec<_>>().join(" ")
                     }
                 }
                 _ => {
@@ -4097,8 +4267,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -4387,7 +4558,8 @@ impl CommandStepDef {
                         None => quote! { "" },
                     };
                     quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                            .split_whitespace().collect::<Vec<_>>().join(" ")
                     }
                 }
                 _ => {
@@ -4414,8 +4586,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -4700,8 +4873,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -4984,7 +5158,8 @@ impl CommandStepDef {
                         None => quote! { "" },
                     };
                     quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens).trim().to_string()
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                            .split_whitespace().collect::<Vec<_>>().join(" ")
                     }
                 }
                 _ => {
@@ -5011,8 +5186,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -5273,7 +5449,7 @@ impl CommandStepDef {
 
 struct BlockStepDef {
     prompt: Option<LitStr>,
-    key: Option<(String, proc_macro2::Span)>,
+    key: Option<KeyValue>,
     depends_on: Vec<(String, proc_macro2::Span)>,
     fields: Vec<FieldDef>,
     allowed_teams: Vec<String>,
@@ -5318,8 +5494,9 @@ impl BlockStepDef {
     fn to_tokens_inner(&self) -> TokenStream2 {
         let prompt = self.prompt.as_ref().expect("block prompt must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -5423,8 +5600,9 @@ impl BlockStepDef {
     fn to_group_step_tokens(&self) -> TokenStream2 {
         let prompt = self.prompt.as_ref().expect("block prompt must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -5528,7 +5706,7 @@ impl BlockStepDef {
 
 struct InputStepDef {
     prompt: Option<LitStr>,
-    key: Option<(String, proc_macro2::Span)>,
+    key: Option<KeyValue>,
     depends_on: Vec<(String, proc_macro2::Span)>,
     fields: Vec<FieldDef>,
     allowed_teams: Vec<String>,
@@ -5573,8 +5751,9 @@ impl InputStepDef {
     fn to_tokens_inner(&self) -> TokenStream2 {
         let prompt = self.prompt.as_ref().expect("input prompt must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -5678,8 +5857,9 @@ impl InputStepDef {
     fn to_group_step_tokens(&self) -> TokenStream2 {
         let prompt = self.prompt.as_ref().expect("input prompt must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -5783,8 +5963,8 @@ impl InputStepDef {
 
 struct TriggerStepDef {
     pipeline: Option<LitStr>,
-    label: Option<LitStr>,
-    key: Option<(String, proc_macro2::Span)>,
+    label: Option<syn::Expr>,
+    key: Option<KeyValue>,
     depends_on: Vec<(String, proc_macro2::Span)>,
     async_trigger: bool,
     build: Option<TriggerBuildConfig>,
@@ -5847,8 +6027,9 @@ impl TriggerStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -6003,8 +6184,9 @@ impl TriggerStepDef {
             quote! {}
         };
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -6152,8 +6334,8 @@ impl TriggerStepDef {
 }
 
 struct GroupStepDef {
-    label: Option<LitStr>,
-    key: Option<(String, proc_macro2::Span)>,
+    label: Option<syn::Expr>,
+    key: Option<KeyValue>,
     depends_on: Vec<(String, proc_macro2::Span)>,
     steps: Vec<StepDef>,
     if_condition: Option<LitStr>,
@@ -6163,7 +6345,7 @@ struct GroupStepDef {
 }
 
 impl GroupStepDef {
-    fn new(label: LitStr) -> Self {
+    fn new(label: syn::Expr) -> Self {
         Self {
             label: Some(label),
             key: None,
@@ -6192,8 +6374,9 @@ impl GroupStepDef {
     fn to_tokens_inner(&self) -> TokenStream2 {
         let label = self.label.as_ref().expect("group label must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -6278,8 +6461,9 @@ impl GroupStepDef {
     fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
         let label = self.label.as_ref().expect("group label must be set");
 
-        let key_tokens = if let Some((key, _)) = &self.key {
-            quote! { .key(Some(#key.to_string().try_into().expect("invalid key"))) }
+        let key_tokens = if let Some(key) = &self.key {
+            let key_value = key.to_tokens();
+            quote! { .key(Some(#key_value.try_into().expect("invalid key"))) }
         } else {
             quote! {}
         };
@@ -6416,10 +6600,10 @@ impl CmdExpr {
             .filter(|d| d.code == "SC2154")
             .filter_map(|d| {
                 let msg = &d.message;
-                if let Some(start) = msg.find('\'') {
-                    if let Some(end) = msg[start+1..].find('\'') {
-                        return Some(msg[start+1..start+1+end].to_string());
-                    }
+                if let Some(start) = msg.find('\'')
+                    && let Some(end) = msg[start + 1..].find('\'')
+                {
+                    return Some(msg[start + 1..start + 1 + end].to_string());
                 }
                 None
             })
@@ -6450,7 +6634,6 @@ impl CmdExpr {
     /// Extract the command name (first word) from a shell command.
     fn extract_command_name(command: &str) -> String {
         command
-            .trim()
             .split_whitespace()
             .next()
             .unwrap_or("")
@@ -6465,7 +6648,7 @@ impl CmdExpr {
     fn validate_path_exists(command_name: &str, allow_missing: &[&str]) -> std::result::Result<(), String> {
         use std::path::PathBuf;
         
-        if allow_missing.iter().any(|allowed| *allowed == command_name) {
+        if allow_missing.contains(&command_name) {
             return Ok(());
         }
         

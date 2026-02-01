@@ -1637,3 +1637,210 @@ mod bazel_commands_step {
         assert!(yaml.contains("- bazel build //..."));
     }
 }
+
+mod bazel_flag_shorthands {
+    use super::*;
+
+    #[test]
+    fn config_single_value() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    config: "ci-engflow",
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--config=ci-engflow"));
+    }
+
+    #[test]
+    fn config_array() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    config: ["ci-engflow", "remote"],
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--config=ci-engflow"));
+        assert!(yaml.contains("--config=remote"));
+    }
+
+    #[test]
+    fn compilation_mode() {
+        let p = pipeline! {
+            steps: [
+                bazel_build {
+                    target_patterns: "//...",
+                    compilation_mode: "opt",
+                    label: "Build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--compilation_mode=opt"));
+    }
+
+    #[test]
+    fn build_tag_filters_array() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    build_tag_filters: ["-no-opt-ci", "-lint-test", "-eslint-test"],
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--build_tag_filters=-no-opt-ci,-lint-test,-eslint-test"));
+    }
+
+    #[test]
+    fn build_tag_filters_single() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    build_tag_filters: "-no-opt-ci",
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--build_tag_filters=-no-opt-ci"));
+    }
+
+    #[test]
+    fn test_tag_filters_array() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    test_tag_filters: ["-foo", "-bar", "-baz"],
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--test_tag_filters=-foo,-bar,-baz"));
+    }
+
+    #[test]
+    fn test_tag_filters_single() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    test_tag_filters: "-foo",
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--test_tag_filters=-foo"));
+    }
+
+    #[test]
+    fn flags_array_same_as_string() {
+        let p1 = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    flags: "--jobs=8 --verbose_failures",
+                    label: "Test"
+                }
+            ]
+        };
+        let p2 = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    flags: ["--jobs=8", "--verbose_failures"],
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml1 = serde_yaml::to_string(&p1).unwrap();
+        let yaml2 = serde_yaml::to_string(&p2).unwrap();
+        assert_eq!(yaml1, yaml2);
+    }
+
+    #[test]
+    fn flags_with_separator_no_double() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//... -//excluded:target",
+                    flags: ["--config=foo", "--", "--test_arg=bar"],
+                    label: "Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        let cmd_line = yaml
+            .lines()
+            .find(|l| l.contains("bazel test"))
+            .expect("should contain bazel test command");
+        let separator_count = cmd_line.matches(" -- ").count();
+        assert_eq!(
+            separator_count, 1,
+            "Should have exactly one -- separator, got: {}",
+            cmd_line
+        );
+    }
+
+    #[test]
+    fn combined_shorthand_fields() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    config: ["ci-engflow", "remote"],
+                    compilation_mode: "opt",
+                    build_tag_filters: ["-no-opt-ci", "-lint-test"],
+                    flags: "--jobs=8",
+                    label: "Full Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--config=ci-engflow"));
+        assert!(yaml.contains("--config=remote"));
+        assert!(yaml.contains("--compilation_mode=opt"));
+        assert!(yaml.contains("--build_tag_filters=-no-opt-ci,-lint-test"));
+        assert!(yaml.contains("--jobs=8"));
+    }
+
+    #[test]
+    fn bazel_commands_with_shorthands() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_build {
+                            target_patterns: "//...",
+                            config: "ci",
+                            compilation_mode: "opt"
+                        },
+                        bazel_test {
+                            target_patterns: "//...",
+                            build_tag_filters: ["-foo", "-bar"]
+                        }
+                    ],
+                    label: "Build and Test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--config=ci"));
+        assert!(yaml.contains("--compilation_mode=opt"));
+        assert!(yaml.contains("--build_tag_filters=-foo,-bar"));
+    }
+}

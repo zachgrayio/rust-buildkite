@@ -208,7 +208,6 @@ pub use codegen::*;
 pub mod error;
 pub use error::*;
 
-pub mod bazel;
 pub mod client;
 pub mod services;
 pub mod types;
