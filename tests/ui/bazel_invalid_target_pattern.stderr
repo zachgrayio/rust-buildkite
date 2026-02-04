@@ -1,0 +1,5 @@
+error: Invalid target pattern: 'not-a-valid-target'
+ --> tests/ui/bazel_invalid_target_pattern.rs:7:17
+  |
+7 |                 target_patterns: "not-a-valid-target",
+  |                 ^^^^^^^^^^^^^^^

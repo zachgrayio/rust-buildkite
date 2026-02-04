@@ -1,0 +1,5 @@
+error: bazel! command is empty
+ --> tests/ui/bazel_empty_command.rs:7:33
+  |
+7 |                 command: bazel!(""),
+  |                                 ^^

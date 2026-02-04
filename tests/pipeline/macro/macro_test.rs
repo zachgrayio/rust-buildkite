@@ -1158,3 +1158,183 @@ mod if_conditions {
         assert!(yaml.contains("if:"));
     }
 }
+
+mod multiple_commands {
+    use super::*;
+
+    #[test]
+    fn object_literal_commands_array() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("npm install"),
+                        cmd!("npm test"),
+                        cmd!("npm build")
+                    ],
+                    label: "Build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- npm install"));
+        assert!(yaml.contains("- npm test"));
+        assert!(yaml.contains("- npm build"));
+    }
+
+    #[test]
+    fn fluent_chained_commands() {
+        let pipeline = pipeline! {
+            steps: [
+                command(cmd!("npm install"))
+                    .command(cmd!("npm test"))
+                    .label("Test")
+                    .key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- npm install"));
+        assert!(yaml.contains("- npm test"));
+    }
+
+    #[test]
+    fn single_command_uses_command_field() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo hello"),
+                    label: "Hello",
+                    key: "hello"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("command: echo hello"));
+        assert!(!yaml.contains("commands:"));
+    }
+
+    #[test]
+    fn multiple_commands_with_env() {
+        let pipeline = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("npm install"),
+                        cmd!("npm test")
+                    ],
+                    label: "Test",
+                    key: "test",
+                    env: {
+                        NODE_ENV: "test"
+                    }
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("NODE_ENV: test"));
+    }
+}
+
+mod dynamic_label_and_key {
+    use rust_buildkite::pipeline;
+
+    #[test]
+    fn dynamic_label_with_format() {
+        let name = "myapp";
+        let p = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    label: format!("{} build", name)
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("label: myapp build"));
+    }
+
+    #[test]
+    fn dynamic_label_with_variable() {
+        let label_text = "dynamic label";
+        let p = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    label: label_text.to_string()
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("label: dynamic label"));
+    }
+
+    #[test]
+    fn dynamic_key_with_runtime() {
+        let key_name = "dynamic_key";
+        let p = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo test"),
+                    key: runtime!(format!("{}_step", key_name))
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("key: dynamic_key_step"));
+    }
+
+    #[test]
+    fn static_key_still_validates() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    command: cmd!("echo first"),
+                    key: "first_step"
+                },
+                command {
+                    command: cmd!("echo second"),
+                    depends_on: ["first_step"]
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("key: first_step"));
+        assert!(yaml.contains("depends_on:"));
+    }
+
+    #[test]
+    fn group_with_dynamic_label() {
+        let group_name = "my_group";
+        let p = pipeline! {
+            steps: [
+                group(format!("{} steps", group_name)).steps([
+                    command {
+                        command: cmd!("echo inner"),
+                        label: "inner"
+                    }
+                ])
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("group: my_group steps"));
+    }
+
+    #[test]
+    fn trigger_with_dynamic_label() {
+        let pipeline_name = "downstream";
+        let p = pipeline! {
+            steps: [
+                trigger {
+                    trigger: "downstream-pipeline",
+                    label: format!("Trigger {}", pipeline_name)
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("label: Trigger downstream"));
+    }
+}

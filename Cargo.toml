@@ -3,6 +3,10 @@ name = "rust-buildkite"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+bazel = ["rust-buildkite-macros/bazel"]
+
 [dependencies]
 async-trait = "0.1"
 regress = "0.10"
@@ -237,3 +241,8 @@ path = "examples/pipeline/macro/dynamic_pipeline.rs"
 [[example]]
 name = "dynamic-pipeline-script"
 path = "examples/pipeline/script/dynamic_pipeline.rs"
+
+[[example]]
+name = "bazel"
+path = "examples/pipeline/bazel/pipeline.rs"
+required-features = ["bazel"]
