@@ -9,6 +9,7 @@ bazel = ["rust-buildkite-macros/bazel"]
 
 [dependencies]
 async-trait = "0.1"
+inventory = "0.3"
 regress = "0.10"
 rust-buildkite-macros = { path = "rust-buildkite-macros" }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
@@ -246,3 +247,7 @@ path = "examples/pipeline/script/dynamic_pipeline.rs"
 name = "bazel"
 path = "examples/pipeline/bazel/pipeline.rs"
 required-features = ["bazel"]
+
+[[example]]
+name = "pipeline-registry"
+path = "examples/pipeline/registry/main.rs"

@@ -2326,6 +2326,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "inventory",
  "prettyplease",
  "regress",
  "reqwest",

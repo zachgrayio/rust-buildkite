@@ -258,9 +258,20 @@ fn make_cache_key(verb: &str, flags: &[&str]) -> String {
     format!("{}_{:x}", verb, hasher.finish())
 }
 
-/// Get the cache file path for a workspace.
+/// Get the cache file path.
+///
+/// Prefers OUT_DIR when available.
+/// Falls back to workspace-relative path for rust-script or other environments.
 fn get_cache_file_path(workspace: &Path) -> std::path::PathBuf {
-    workspace.join(".buildkite").join(".bazel-flags-cache.json")
+    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let path = std::path::PathBuf::from(&out_dir).join("bazel-flags-cache.json");
+        debug_log!("bazel", "Using OUT_DIR cache path: {}", path.display());
+        return path;
+    }
+
+    let fallback = workspace.join(".buildkite").join(".bazel-flags-cache.json");
+    debug_log!("bazel", "OUT_DIR not set, using fallback cache path: {}", fallback.display());
+    fallback
 }
 
 /// Load the flags cache from disk, validating against bazelrc mtime.

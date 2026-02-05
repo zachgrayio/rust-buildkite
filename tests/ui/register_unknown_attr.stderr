@@ -1,0 +1,5 @@
+error: unknown attribute: unknown_field
+ --> tests/ui/register_unknown_attr.rs:3:12
+  |
+3 | #[register(unknown_field = "value")]
+  |            ^^^^^^^^^^^^^

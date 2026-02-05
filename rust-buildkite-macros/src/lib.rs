@@ -7158,6 +7158,131 @@ impl BazelExpr {
     }
 }
 
+fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+fn snake_to_title(s: &str) -> String {
+    s.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+struct PipelineDefAttr {
+    branch: Option<TokenStream2>,
+    cron: Option<String>,
+}
+
+impl Parse for PipelineDefAttr {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut branch = None;
+        let mut cron = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "branch" => {
+                    let tokens: TokenStream2 = if input.peek(Ident) {
+                        let variant: Ident = input.parse()?;
+                        let variant_str = variant.to_string();
+                        if input.peek(syn::token::Paren) {
+                            let content;
+                            syn::parenthesized!(content in input);
+                            let arg: TokenStream2 = content.parse()?;
+                            quote! { ::rust_buildkite::BranchPattern::#variant(#arg) }
+                        } else {
+                            return Err(Error::new(
+                                variant.span(),
+                                format!("BranchPattern::{} requires arguments", variant_str),
+                            ));
+                        }
+                    } else {
+                        return Err(Error::new(input.span(), "expected BranchPattern variant"));
+                    };
+                    branch = Some(tokens);
+                }
+                "cron" => {
+                    let lit: LitStr = input.parse()?;
+                    cron = Some(lit.value());
+                }
+                other => {
+                    return Err(Error::new(key.span(), format!("unknown attribute: {}", other)));
+                }
+            }
+
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(PipelineDefAttr {
+            branch,
+            cron,
+        })
+    }
+}
+
+#[proc_macro_attribute]
+pub fn register(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = match syn::parse::<PipelineDefAttr>(attr) {
+        Ok(a) => a,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let func = match syn::parse::<syn::ItemFn>(item) {
+        Ok(f) => f,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let fn_name = &func.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let id = snake_to_pascal(&fn_name_str);
+    let name = snake_to_title(&fn_name_str);
+
+    let branch_tokens = match &attr.branch {
+        Some(b) => quote! { Some(#b) },
+        None => quote! { None },
+    };
+
+    let cron_tokens = match &attr.cron {
+        Some(c) => quote! { Some(#c) },
+        None => quote! { None },
+    };
+
+    let output = quote! {
+        #func
+
+        ::rust_buildkite::inventory::submit! {
+            ::rust_buildkite::PipelineRegistration {
+                id: #id,
+                name: #name,
+                generate: #fn_name,
+                branch: #branch_tokens,
+                cron: #cron_tokens,
+            }
+        }
+    };
+
+    output.into()
+}
+
 #[cfg(all(test, feature = "bazel"))]
 mod quote_flag_values_tests {
     use super::BazelExpr;

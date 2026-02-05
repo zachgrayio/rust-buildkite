@@ -154,6 +154,105 @@ fn main() {
 }
 ```
 
+## Pipeline Registration
+
+For projects with multiple pipelines, use the `#[register]` attribute macro to declare pipelines with metadata, then use `registered_pipelines()` to iterate over them at runtime:
+
+```rust
+// src/pipelines/premerge.rs
+use rust_buildkite::{pipeline, register};
+
+#[register(branch = Prefix("feature/"))]
+pub fn premerge() {
+    let p = pipeline! { /* ... */ };
+    println!("{}", serde_yaml::to_string(&p).unwrap());
+}
+```
+
+```rust
+// src/bin/generate.rs
+use rust_buildkite::registered_pipelines;
+
+fn main() {
+    mylib::link_pipelines();  // Required - see below
+    
+    let branch = std::env::var("BUILDKITE_BRANCH").unwrap_or_default();
+    
+    for p in registered_pipelines() {
+        if let Some(ref pattern) = p.branch {
+            if pattern.matches(&branch) {
+                (p.generate)();
+                return;
+            }
+        }
+    }
+}
+```
+
+### Linker Requirements
+
+Due to how Rust's linker works with `inventory`, pipeline modules that aren't directly referenced by the binary may be stripped. Use `link_pipelines!` to force linking:
+
+Option 1: Manual
+
+```rust
+// src/lib.rs
+rust_buildkite::link_pipelines!(
+    pipelines::premerge::premerge,
+    pipelines::postmerge::postmerge,
+    pipelines::release::release,
+);
+```
+
+Option 2: Generate with build.rs
+
+```rust
+// build.rs
+use std::{env, fs, path::Path};
+
+fn main() {
+    let out = env::var("OUT_DIR").unwrap();
+    let mut fns = Vec::new();
+    scan("src/pipelines", &[], &mut fns);
+    
+    let list = fns.join(",\n    ");
+    fs::write(
+        Path::new(&out).join("links.rs"),
+        format!("rust_buildkite::link_pipelines!(\n    {list},\n);"),
+    ).unwrap();
+    
+    println!("cargo:rerun-if-changed=src/pipelines");
+}
+
+fn scan(dir: &str, prefix: &[&str], out: &mut Vec<String>) {
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        let name = p.file_name().unwrap().to_str().unwrap();
+        if p.is_dir() {
+            let mut new_prefix = prefix.to_vec();
+            new_prefix.push(name);
+            scan(p.to_str().unwrap(), &new_prefix, out);
+        } else if name.ends_with(".rs") && name != "mod.rs" {
+            if fs::read_to_string(&p).unwrap().contains("#[register") {
+                let mod_name = name.trim_end_matches(".rs");
+                let path = if prefix.is_empty() {
+                    format!("pipelines::{mod_name}::{mod_name}")
+                } else {
+                    format!("pipelines::{}::{mod_name}::{mod_name}", prefix.join("::"))
+                };
+                out.push(path);
+            }
+        }
+    }
+}
+```
+
+and then:
+
+```rust
+include!(concat!(env!("OUT_DIR"), "/links.rs"));
+```
+
 # Roadmap
 
 - [ ] create a CI pipeline and releases
