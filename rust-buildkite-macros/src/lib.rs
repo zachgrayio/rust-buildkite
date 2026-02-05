@@ -1890,6 +1890,7 @@ impl StepDef {
         let mut target_patterns_span: Option<proc_macro2::Span> = None;
         let mut flags_value: Option<DynamicValue> = None;
         let mut extra_flags: Vec<String> = Vec::new();
+        let mut args: Vec<String> = Vec::new();
         let mut validate_targets = true;
         let mut dry_run = false;
         let mut step_custom_verbs: Vec<String> = Vec::new();
@@ -1994,6 +1995,22 @@ impl StepDef {
                 "dry_run" => {
                     let val: syn::LitBool = content.parse()?;
                     dry_run = val.value();
+                }
+                "args" => {
+                    if content.peek(syn::token::Bracket) {
+                        let args_content;
+                        bracketed!(args_content in content);
+                        while !args_content.is_empty() {
+                            let arg: LitStr = args_content.parse()?;
+                            args.push(arg.value());
+                            if args_content.peek(Token![,]) {
+                                args_content.parse::<Token![,]>()?;
+                            }
+                        }
+                    } else {
+                        let arg: LitStr = content.parse()?;
+                        args.push(arg.value());
+                    }
                 }
                 "custom_verbs" => {
                     let verbs_content;
@@ -2162,6 +2179,20 @@ impl StepDef {
                 }
             }
 
+            if validate_targets {
+                if let Some(ref t) = target_str {
+                    if !t.is_empty() {
+                        if let Ok((workspace, script_dir)) = bazel::find_bazel_workspace_and_script_dir() {
+                            let current_pkg = targets::get_current_package(&workspace, &script_dir);
+                            let target_args: Vec<&str> = t.split_whitespace().collect();
+                            if let Err(e) = bazel::fast_validate_targets(&target_args, &workspace, current_pkg.as_deref()) {
+                                return Err(Error::new(target_patterns_span.unwrap_or(step_span), e));
+                            }
+                        }
+                    }
+                }
+            }
+
             let has_subtraction = target_str.as_ref().map_or(false, |t| {
                 t.split_whitespace().any(|p| {
                     p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
@@ -2191,6 +2222,12 @@ impl StepDef {
                 }
                 cmd_parts.push(t.clone());
             }
+
+            if !args.is_empty() {
+                cmd_parts.push("--".to_string());
+                cmd_parts.extend(args.clone());
+            }
+
             let bazel_cmd = cmd_parts.join(" ");
 
             let lit = LitStr::new(&bazel_cmd, step_span);
