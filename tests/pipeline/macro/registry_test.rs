@@ -12,12 +12,6 @@ pub fn branch_exact_pipeline() {}
 #[register(branch = Prefix("release/"))]
 pub fn branch_prefix_pipeline() {}
 
-#[register(returns_early = true)]
-pub fn early_return_pipeline() {}
-
-#[register(cron = "0 0 * * *", returns_early = true)]
-pub fn combined_attrs_pipeline() {}
-
 #[test]
 fn test_simple_registration() {
     let pipelines: Vec<_> = registered_pipelines().collect();
@@ -27,7 +21,6 @@ fn test_simple_registration() {
     assert_eq!(simple.name, "Simple Pipeline");
     assert!(simple.branch.is_none());
     assert!(simple.cron.is_none());
-    assert!(!simple.returns_early);
 }
 
 #[test]
@@ -72,44 +65,6 @@ fn test_branch_prefix_registration() {
         branch_prefix.branch,
         Some(BranchPattern::Prefix("release/"))
     ));
-}
-
-#[test]
-fn test_early_return_registration() {
-    let pipelines: Vec<_> = registered_pipelines().collect();
-    let early = pipelines.iter().find(|p| p.id == "EarlyReturnPipeline");
-    assert!(early.is_some(), "EarlyReturnPipeline should be registered");
-    let early = early.unwrap();
-    assert!(early.returns_early);
-}
-
-#[test]
-fn test_combined_attrs_registration() {
-    let pipelines: Vec<_> = registered_pipelines().collect();
-    let combined = pipelines.iter().find(|p| p.id == "CombinedAttrsPipeline");
-    assert!(
-        combined.is_some(),
-        "CombinedAttrsPipeline should be registered"
-    );
-    let combined = combined.unwrap();
-    assert_eq!(combined.cron, Some("0 0 * * *"));
-    assert!(combined.returns_early);
-}
-
-#[test]
-fn test_snake_to_pascal_conversion() {
-    let pipelines: Vec<_> = registered_pipelines().collect();
-    let early = pipelines.iter().find(|p| p.id == "EarlyReturnPipeline");
-    assert!(early.is_some());
-    assert_eq!(early.unwrap().id, "EarlyReturnPipeline");
-}
-
-#[test]
-fn test_snake_to_title_conversion() {
-    let pipelines: Vec<_> = registered_pipelines().collect();
-    let early = pipelines.iter().find(|p| p.id == "EarlyReturnPipeline");
-    assert!(early.is_some());
-    assert_eq!(early.unwrap().name, "Early Return Pipeline");
 }
 
 #[test]

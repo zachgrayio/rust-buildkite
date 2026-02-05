@@ -1,4 +1,3 @@
-#![cfg(feature = "bazel")]
 #![allow(unused_imports)]
 
 use rust_buildkite::{bazel, comptime, pipeline, runtime};
@@ -155,6 +154,68 @@ mod shorthand_macros {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("command: bazel run //foo:bar"));
+    }
+
+    #[test]
+    fn bazel_run_with_args_array() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    args: ["--flag", "value", "--verbose"],
+                    label: "run with args"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel run //foo:bar -- --flag value --verbose"));
+    }
+
+    #[test]
+    fn bazel_run_with_args_single() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    args: "--help",
+                    label: "run help"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel run //foo:bar -- --help"));
+    }
+
+    #[test]
+    fn bazel_run_with_flags_and_args() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    flags: "--jobs=8",
+                    args: ["--program-flag", "value"],
+                    label: "run with both"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel run --jobs=8 //foo:bar -- --program-flag value"));
+    }
+
+    #[test]
+    fn bazel_run_with_config_and_args() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//tools:deploy",
+                    config: "ci",
+                    args: ["--env", "prod"],
+                    label: "deploy"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("command: bazel run --config=ci //tools:deploy -- --env prod"));
     }
 
     #[test]

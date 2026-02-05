@@ -9,6 +9,7 @@
 //! - `label: expr` - Any expression for labels
 //! - `key: "literal"` - Validated keys
 //! - `key: runtime!(expr)` - Dynamic keys (skip validation)
+//! - `args: ["--flag", "value"]` - Program args for bazel run
 //! - `comptime_shell!("cmd")` - Shell at compile time
 //! - `comptime!(CONST)` - Const at compile time
 //! - `runtime!(expr)` - Runtime expression (skip validation)
@@ -96,6 +97,14 @@ fn main() {
                 flags: runtime!(dynamic_flags),
                 label: "runtime targets",
                 key: "build_dynamic"
+            },
+
+            bazel_run {
+                target_patterns: "//tools:deploy",
+                config: "ci",
+                args: ["--env", "prod", "--verbose"],
+                label: "deploy",
+                key: "deploy"
             },
 
             // Custom verb

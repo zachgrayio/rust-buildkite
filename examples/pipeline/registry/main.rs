@@ -34,7 +34,7 @@ fn nightly() {
     println!("{}", serde_yaml::to_string(&pipeline).unwrap());
 }
 
-#[register(branch = Prefix("release/"), returns_early = true)]
+#[register(branch = Prefix("release/"))]
 fn release() {
     let pipeline = build_simple_pipeline("Release");
     println!("{}", serde_yaml::to_string(&pipeline).unwrap());
@@ -72,9 +72,6 @@ fn main() {
         {
             println!("Branch '{}' matched pipeline: {}", branch, p.name);
             (p.generate)();
-            if p.returns_early {
-                return;
-            }
         }
     }
 
