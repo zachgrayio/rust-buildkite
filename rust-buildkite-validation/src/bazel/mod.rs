@@ -9,12 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static WARNED_NO_WORKSPACE: AtomicBool = AtomicBool::new(false);
 
-fn warn_no_workspace_once(context: &str) {
+fn skip_no_workspace() {
     if !WARNED_NO_WORKSPACE.swap(true, Ordering::Relaxed) {
         eprintln!(
-            "warning: Bazel workspace not found, skipping runtime validation for {}. \
-             Set BUILD_WORKSPACE_DIRECTORY or run from within a Bazel workspace.",
-            context
+            "warning: Bazel workspace not found, skipping Bazel validation. \
+             Set BUILD_WORKSPACE_DIRECTORY or run from a Bazel workspace."
         );
     }
 }
@@ -39,7 +38,7 @@ pub fn validate_target(target: &str) {
     }
 
     let Some(ref ws) = guard.bazel_workspace else {
-        warn_no_workspace_once("targets");
+        skip_no_workspace();
         return;
     };
     let ws = ws.clone();
@@ -104,7 +103,13 @@ pub fn validate_flags(verb: &str, flags_slice: &[&str]) {
         return;
     }
 
-    let flag_vec: Vec<&str> = flags_slice
+    let before_separator: &[&str] = flags_slice
+        .iter()
+        .position(|f| *f == "--")
+        .map(|pos| &flags_slice[..pos])
+        .unwrap_or(flags_slice);
+
+    let flag_vec: Vec<&str> = before_separator
         .iter()
         .filter(|f| f.starts_with('-') && !f.starts_with("-//") && !f.starts_with("-@"))
         .copied()
@@ -126,7 +131,7 @@ pub fn validate_flags(verb: &str, flags_slice: &[&str]) {
     }
 
     let Some(ref ws) = guard.bazel_workspace else {
-        warn_no_workspace_once("flags");
+        skip_no_workspace();
         return;
     };
     let ws = ws.clone();

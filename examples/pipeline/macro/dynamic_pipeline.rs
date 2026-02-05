@@ -8,15 +8,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             CI: "true",
             NODE_ENV: "test"
         },
-        runtime_env: [SHELL_ENV, BUILDKITE_ENV],
-        allow_missing_paths: ["./deploy.sh"],
+        expect_env: [SHELL_ENV],
         steps: [
             command {
                 command: cmd!("echo 'Hello, World!'"),
                 label: "👋 Say Hello"
             },
             command {
-                command: cmd!(r#"echo "Branch: $BUILDKITE_BRANCH""#),
+                command: cmd!("echo \"Build: $USER\""),
                 label: "📋 Build Info"
             },
             command {
@@ -34,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompt: "Are you sure?"
             },
             command {
-                command: cmd!("cd dist && ./deploy.sh production"),
+                command: cmd!("echo 'Deploying...'"),
                 label: "🚀 Deploy",
                 depends_on: ["tests", "approval"]
             }

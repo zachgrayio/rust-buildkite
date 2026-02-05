@@ -12,7 +12,7 @@
 //!
 //! let p = pipeline! {
 //!     env: { CI: "true" },
-//!     allow_missing_paths: ["./deploy.sh"],
+//!     expect_paths: ["./deploy.sh"],
 //!     steps: [
 //!         command(cmd!("echo hello")).label("Say Hello").key("hello"),
 //!         command(cmd!("cat README.md")).key("tests").depends_on("hello"),
@@ -63,14 +63,14 @@
 //! ## Path Validation
 //!
 //! Path-based commands (`./script.sh`, `/usr/bin/env`) are validated to exist
-//! at compile time. For paths that only exist at runtime, use `allow_missing_paths`:
+//! at compile time. For paths that only exist at runtime, use `expect_paths`:
 //!
 //! ```no_run
 //! use rust_buildkite::pipeline;
 //!
 //! let p = pipeline! {
 //!     // Skip validation for paths that don't exist on the build machine
-//!     allow_missing_paths: ["./deploy.sh", "./scripts/setup.sh"],
+//!     expect_paths: ["./deploy.sh", "./scripts/setup.sh"],
 //!     steps: [
 //!         command(cmd!("./deploy.sh production")).key("deploy"),
 //!     ]

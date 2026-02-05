@@ -175,7 +175,8 @@ pub fn validate_path(path: &str) {
 
     if !full_path.exists() {
         validation_failure(&format!(
-            "Path validation failed: '{}' does not exist (resolved to {})",
+            "Expected path '{}' does not exist (resolved to {}).\n\
+             Tip: Set BUILDKITE_SKIP_RUNTIME_VALIDATION=1 to skip",
             path,
             full_path.display()
         ));
@@ -211,7 +212,11 @@ pub fn validate_env_var(name: &str) {
     drop(guard);
 
     if std::env::var(name).is_err() {
-        validation_failure(&format!("Environment variable '{}' is not set", name));
+        validation_failure(&format!(
+            "Expected environment variable '{}' is not set.\n\
+             Tip: Set it or use BUILDKITE_SKIP_RUNTIME_VALIDATION=1",
+            name
+        ));
         return;
     }
 

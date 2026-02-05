@@ -230,7 +230,7 @@ mod allowed_commands {
 
         let pipeline = pipeline! {
             allowed_commands: ["./deploy.sh", "/usr/bin/env"],
-            allow_missing_paths: ["./deploy.sh"],
+            expect_paths: ["./deploy.sh"],
             steps: [
                 command(cmd!("./deploy.sh production")).key("deploy"),
                 command(cmd!("/usr/bin/env bash -c 'echo hi'")).key("bash")
@@ -310,7 +310,7 @@ mod allowed_commands {
     }
 }
 
-mod runtime_env {
+mod expect_env {
     use super::*;
 
     #[test]
@@ -343,9 +343,9 @@ mod runtime_env {
     }
 
     #[test]
-    fn runtime_env_permits_vars() {
+    fn expect_env_permits_vars() {
         let pipeline = pipeline! {
-            runtime_env: ["HOME", "PATH", "USER"],
+            expect_env: ["HOME", "PATH", "USER"],
             steps: [
                 command(cmd!(r#"echo "$HOME" "$PATH" "$USER""#)).key("test")
             ]
@@ -361,7 +361,7 @@ mod runtime_env {
             env: {
                 PIPELINE_VAR: "p"
             },
-            runtime_env: ["ALLOWED_VAR"],
+            expect_env: ["ALLOWED_VAR"],
             steps: [
                 command(cmd!(r#"echo "$PIPELINE_VAR" "$STEP_VAR" "$ALLOWED_VAR""#))
                     .key("test")
@@ -378,7 +378,7 @@ mod runtime_env {
     #[test]
     fn shell_builtins_allowed() {
         let pipeline = pipeline! {
-            runtime_env: ["HOME", "PROJECT_DIR"],
+            expect_env: ["HOME", "PROJECT_DIR"],
             steps: [
                 command(cmd!(r#"cd "$HOME" && pwd"#)).key("cd"),
                 command(cmd!("export FOO=bar")).key("export"),
@@ -401,7 +401,7 @@ mod runtime_env {
     }
 
     #[test]
-    fn default_to_host_env_when_runtime_env_not_specified() {
+    fn default_to_host_env_when_expect_env_not_specified() {
         let pipeline = pipeline! {
             steps: [
                 command(cmd!(r#"echo "$HOME""#)).key("home"),
@@ -445,7 +445,7 @@ mod bashrs_behavior {
     #[test]
     fn var_with_default_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "${VAR:-fallback}""#)).key("test")
             ]
@@ -457,7 +457,7 @@ mod bashrs_behavior {
     #[test]
     fn simple_var_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "$VAR""#)).key("test")
             ]
@@ -469,7 +469,7 @@ mod bashrs_behavior {
     #[test]
     fn braced_var_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "${VAR}""#)).key("test")
             ]

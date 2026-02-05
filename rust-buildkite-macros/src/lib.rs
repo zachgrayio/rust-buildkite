@@ -15,6 +15,8 @@
 //! Set `BUILDKITE_SKIP_COMPTIME_VALIDATION=1` to skip all compile-time checks.
 //! Runtime validation is still performed when the pipeline binary runs.
 
+#![allow(clippy::unused_enumerate_index)]
+
 #[cfg(feature = "bazel")]
 mod bazel;
 
@@ -33,12 +35,24 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
 use std::collections::HashSet;
+#[cfg(feature = "bazel")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use syn::{
     Error, Ident, LitStr, Result, Token, braced, bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
 };
+
+#[cfg(feature = "bazel")]
+static WARNED_NO_WORKSPACE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "bazel")]
+fn warn_no_workspace_once() {
+    if !WARNED_NO_WORKSPACE.swap(true, Ordering::Relaxed) {
+        eprintln!("warning: Bazel workspace not found, skipping compile-time validation.");
+    }
+}
 
 /// Check if compile-time validation should be skipped.
 /// Set BUILDKITE_SKIP_COMPTIME_VALIDATION=1 to skip all compile-time checks
@@ -111,12 +125,13 @@ const SHELL_BUILTINS: &[&str] = &[
     "typeset",
 ];
 
-/// Expand known runtime_env keywords to their literal values.
+/// Expand known expect_env keywords to their literal values.
 /// These are recognized by the macro and expanded inline.
 fn expand_known_env_list(ident: &str) -> Option<&'static [&'static str]> {
     match ident {
         "SHELL_ENV" => Some(&[
-            "HOME", "PATH", "USER", "SHELL", "PWD", "TERM", "TMPDIR",
+            "HOME", "PATH", "USER", "SHELL", "PWD", "OLDPWD", "TERM", "HOSTNAME", "LANG", "LC_ALL",
+            "TZ", "TMPDIR",
         ]),
         "BUILDKITE_ENV" => Some(&[
             "BUILDKITE",
@@ -172,7 +187,7 @@ fn expand_known_env_list(ident: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Discover all environment variables on the host machine at compile time.
-/// This provides the default runtime_env list.
+/// This provides the default expect_env list.
 fn discover_host_env_vars() -> HashSet<String> {
     std::env::vars().map(|(k, _)| k).collect()
 }
@@ -347,16 +362,14 @@ impl NestedValue {
 /// use rust_buildkite::pipeline;
 ///
 /// let p = pipeline! {
-///     env: {
-///         CI: "true",
-///         NODE_ENV: "test"
-///     },
+///     env: { CI: "true" },
+///     expect_env: [SHELL_ENV, BUILDKITE_ENV],
 ///     steps: [
-///         command("echo hello").label("Say Hello").key("hello"),
-///         command("npm test").label("Tests").key("tests").depends_on("hello"),
+///         command(cmd!("echo hello")).label("Say Hello").key("hello"),
+///         command(cmd!("npm test")).label("Tests").key("tests").depends_on("hello"),
 ///         wait,
 ///         block("Deploy to Production?"),
-///         command("./deploy.sh").depends_on("tests")
+///         command(cmd!("./deploy.sh")).depends_on("tests")
 ///     ]
 /// };
 /// ```
@@ -370,7 +383,7 @@ pub fn pipeline(input: TokenStream) -> TokenStream {
     }
 }
 
-enum RuntimeEnvItem {
+enum ExpectEnvItem {
     Literal(String),
     ConstRef(syn::Path),
 }
@@ -601,8 +614,8 @@ enum SecretsValue {
 struct PipelineDef {
     allowed_commands: Option<Vec<(String, proc_macro2::Span)>>,
     additional_commands: Vec<String>,
-    allow_missing_paths: Vec<String>,
-    runtime_env: Option<Vec<RuntimeEnvItem>>,
+    expect_paths: Vec<String>,
+    expect_env: Option<Vec<ExpectEnvItem>>,
     /// Custom Bazel verbs to allow (enables bazel_<verb> shorthand macros)
     #[cfg(feature = "bazel")]
     #[allow(dead_code)]
@@ -621,8 +634,8 @@ impl Parse for PipelineDef {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut allowed_commands = None;
         let mut additional_commands = Vec::new();
-        let mut allow_missing_paths = Vec::new();
-        let mut runtime_env = None;
+        let mut expect_paths = Vec::new();
+        let mut expect_env = None;
         #[cfg(feature = "bazel")]
         let mut custom_verbs = Vec::new();
         let mut env = None;
@@ -639,25 +652,25 @@ impl Parse for PipelineDef {
             input.parse::<Token![:]>()?;
 
             match key.to_string().as_str() {
-                "allow_missing_paths" => {
+                "expect_paths" => {
                     let content;
                     bracketed!(content in input);
                     while !content.is_empty() {
                         let lit: LitStr = content.parse()?;
-                        allow_missing_paths.push(lit.value());
+                        expect_paths.push(lit.value());
                         if content.peek(Token![,]) {
                             content.parse::<Token![,]>()?;
                         }
                     }
                 }
-                "runtime_env" => {
+                "expect_env" => {
                     let content;
                     bracketed!(content in input);
                     let mut vars = Vec::new();
                     while !content.is_empty() {
                         if content.peek(LitStr) {
                             let lit: LitStr = content.parse()?;
-                            vars.push(RuntimeEnvItem::Literal(lit.value()));
+                            vars.push(ExpectEnvItem::Literal(lit.value()));
                         } else {
                             let path: syn::Path = content.parse()?;
                             let ident_str = path.get_ident().map(|i| i.to_string());
@@ -665,20 +678,20 @@ impl Parse for PipelineDef {
                             if let Some(ref name) = ident_str {
                                 if let Some(known_vars) = expand_known_env_list(name) {
                                     for var in known_vars {
-                                        vars.push(RuntimeEnvItem::Literal(var.to_string()));
+                                        vars.push(ExpectEnvItem::Literal(var.to_string()));
                                     }
                                 } else {
-                                    vars.push(RuntimeEnvItem::ConstRef(path));
+                                    vars.push(ExpectEnvItem::ConstRef(path));
                                 }
                             } else {
-                                vars.push(RuntimeEnvItem::ConstRef(path));
+                                vars.push(ExpectEnvItem::ConstRef(path));
                             }
                         }
                         if content.peek(Token![,]) {
                             content.parse::<Token![,]>()?;
                         }
                     }
-                    runtime_env = Some(vars);
+                    expect_env = Some(vars);
                 }
                 #[cfg(feature = "bazel")]
                 "custom_verbs" => {
@@ -901,8 +914,8 @@ impl Parse for PipelineDef {
         Ok(PipelineDef {
             allowed_commands,
             additional_commands,
-            allow_missing_paths,
-            runtime_env,
+            expect_paths,
+            expect_env,
             #[cfg(feature = "bazel")]
             custom_verbs,
             env,
@@ -945,11 +958,7 @@ impl PipelineDef {
                 }
             }
         }
-        let allow_missing: Vec<&str> = self
-            .allow_missing_paths
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+        let allow_missing: Vec<&str> = self.expect_paths.iter().map(|s| s.as_str()).collect();
         self.validate_paths(&self.steps, &allow_missing)?;
         let mut allowed_names: HashSet<String> = if let Some(allowed) = &self.allowed_commands {
             allowed.iter().map(|(s, _)| s.clone()).collect()
@@ -994,11 +1003,11 @@ impl PipelineDef {
         };
 
         // nb: code to "use" any const refs to suppress unused import warnings
-        let const_ref_uses: Vec<TokenStream2> = if let Some(runtime_env) = &self.runtime_env {
-            runtime_env
+        let const_ref_uses: Vec<TokenStream2> = if let Some(expect_env) = &self.expect_env {
+            expect_env
                 .iter()
                 .filter_map(|item| {
-                    if let RuntimeEnvItem::ConstRef(path) = item {
+                    if let ExpectEnvItem::ConstRef(path) = item {
                         Some(quote! { let _ = #path; })
                     } else {
                         None
@@ -1068,24 +1077,16 @@ impl PipelineDef {
         };
 
         let path_validations: Vec<TokenStream2> = self
-            .allow_missing_paths
+            .expect_paths
             .iter()
             .map(|p| quote! { ::rust_buildkite::validation::validate_path(#p); })
             .collect();
 
-        let env_validations: Vec<TokenStream2> = if let Some(runtime_env) = &self.runtime_env {
-            runtime_env
-                .iter()
-                .filter_map(|item| match item {
-                    RuntimeEnvItem::Literal(name) => {
-                        Some(quote! { ::rust_buildkite::validation::validate_env_var(#name); })
-                    }
-                    RuntimeEnvItem::ConstRef(_) => None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let used_env_vars = self.collect_used_env_vars(&self.steps);
+        let env_validations: Vec<TokenStream2> = used_env_vars
+            .iter()
+            .map(|var| quote! { ::rust_buildkite::validation::validate_env_var(#var); })
+            .collect();
 
         Ok(quote! {
             {
@@ -1188,8 +1189,8 @@ impl PipelineDef {
     }
 
     /// Validate that environment variables used in commands are defined.
-    /// Variables must be explicitly defined in: pipeline env block, step env, or runtime_env list.
-    /// If runtime_env is not specified, defaults to host environment variables.
+    /// Variables must be explicitly defined in: pipeline env block, step env, or expect_env list.
+    /// If expect_env is not specified, defaults to host environment variables.
     fn validate_env_vars(&self, steps: &[StepDef]) -> Result<()> {
         if should_skip_comptime_validation() {
             return Ok(());
@@ -1203,13 +1204,13 @@ impl PipelineDef {
             }
         }
 
-        if let Some(runtime_env) = &self.runtime_env {
-            for item in runtime_env {
+        if let Some(expect_env) = &self.expect_env {
+            for item in expect_env {
                 match item {
-                    RuntimeEnvItem::Literal(name) => {
+                    ExpectEnvItem::Literal(name) => {
                         allowed_vars.insert(name.clone());
                     }
-                    RuntimeEnvItem::ConstRef(_) => {
+                    ExpectEnvItem::ConstRef(_) => {
                         has_const_refs = true;
                     }
                 }
@@ -1249,7 +1250,7 @@ impl PipelineDef {
                                     format!(
                                         "Environment variable '{}' is not defined.\n\
                                          Add it to pipeline env: env: {{ {}: \"value\" }}\n\
-                                         Or allow it: runtime_env: [\"{}\"]",
+                                         Or allow it: expect_env: [\"{}\"]",
                                         var, var, var
                                     ),
                                 ));
@@ -1264,6 +1265,30 @@ impl PipelineDef {
             }
         }
         Ok(())
+    }
+
+    fn collect_used_env_vars(&self, steps: &[StepDef]) -> HashSet<String> {
+        let mut used = HashSet::new();
+        self.collect_used_env_vars_from_steps(steps, &mut used);
+        used
+    }
+
+    fn collect_used_env_vars_from_steps(&self, steps: &[StepDef], used: &mut HashSet<String>) {
+        for step in steps {
+            match step {
+                StepDef::Command(cmd_step) => {
+                    for cmd_value in &cmd_step.commands {
+                        for var in cmd_value.get_undefined_vars() {
+                            used.insert(var.clone());
+                        }
+                    }
+                }
+                StepDef::Group(group) => {
+                    self.collect_used_env_vars_from_steps(&group.steps, used);
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -4060,6 +4085,7 @@ impl CommandValue {
     }
 
     /// Get the command string value (for static commands only)
+    #[cfg(feature = "bazel")]
     fn get_command_string(&self) -> String {
         match &self.0 {
             CommandSource::Shell(cmd) => cmd.command.clone(),
@@ -4256,6 +4282,7 @@ impl CommandValue {
                     quote! { #cmd_string.to_string() }
                 }
             }
+            #[cfg(feature = "bazel")]
             _ => {
                 let cmd_string = self.get_command_string();
                 quote! { #cmd_string.to_string() }
@@ -6996,7 +7023,7 @@ struct CmdExpr {
     /// The first command name (for allowlist validation)
     command_name: String,
     /// Variables that bashrs flagged as undefined (SC2154)
-    /// These need to be validated against pipeline env/runtime_env
+    /// These need to be validated against pipeline env/expect_env
     undefined_vars: Vec<String>,
     /// Span for error reporting
     span: proc_macro2::Span,
@@ -7004,7 +7031,7 @@ struct CmdExpr {
 
 impl CmdExpr {
     /// Parse a command from a string literal and validate with bashrs.
-    /// Path existence is validated separately at pipeline level with allow_missing_paths context.
+    /// Path existence is validated separately at pipeline level with expect_paths context.
     fn from_lit_str(lit: &LitStr) -> Result<Self> {
         let command = lit.value();
         let span = lit.span();
@@ -7026,7 +7053,7 @@ impl CmdExpr {
 
     /// Validate the command string using bashrs linter.
     /// Returns Ok with list of undefined vars (SC2154), or Err for other issues.
-    /// Undefined vars are passed to pipeline-level validation against env/runtime_env.
+    /// Undefined vars are passed to pipeline-level validation against env/expect_env.
     fn validate_with_bashrs(command: &str) -> std::result::Result<Vec<String>, String> {
         use bashrs::linter::{Severity, lint_shell};
 
@@ -7109,7 +7136,7 @@ impl CmdExpr {
             if !path.exists() {
                 return Err(format!(
                     "Command path '{}' does not exist on the build machine.\n\
-                     If this path will exist at runtime, add it to allow_missing_paths.",
+                     If this path will exist at runtime, add it to expect_paths.",
                     command_name
                 ));
             }
@@ -7521,12 +7548,8 @@ impl BazelExpr {
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "warning: Bazel compile-time validation skipped: {}. \
-                         Runtime validation will be performed instead.",
-                        e
-                    );
+                Err(_) => {
+                    warn_no_workspace_once();
                 }
             }
         }

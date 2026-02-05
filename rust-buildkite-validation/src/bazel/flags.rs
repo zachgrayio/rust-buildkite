@@ -55,7 +55,13 @@ pub fn validate_flags_with_bazel(
     flags: &[&str],
     workspace: &Path,
 ) -> Result<(), String> {
-    let flag_vec: Vec<&str> = flags
+    let before_separator: &[&str] = flags
+        .iter()
+        .position(|f| *f == "--")
+        .map(|pos| &flags[..pos])
+        .unwrap_or(flags);
+
+    let flag_vec: Vec<&str> = before_separator
         .iter()
         .filter(|f| f.starts_with('-') && !f.starts_with("-//") && !f.starts_with("-@"))
         .copied()
