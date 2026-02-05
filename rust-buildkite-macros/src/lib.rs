@@ -116,8 +116,7 @@ const SHELL_BUILTINS: &[&str] = &[
 fn expand_known_env_list(ident: &str) -> Option<&'static [&'static str]> {
     match ident {
         "SHELL_ENV" => Some(&[
-            "HOME", "PATH", "USER", "SHELL", "PWD", "OLDPWD", "TERM", "HOSTNAME", "LANG", "LC_ALL",
-            "TZ", "TMPDIR",
+            "HOME", "PATH", "USER", "SHELL", "PWD", "TERM", "TMPDIR",
         ]),
         "BUILDKITE_ENV" => Some(&[
             "BUILDKITE",
