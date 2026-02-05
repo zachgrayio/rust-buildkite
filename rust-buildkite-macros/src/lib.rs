@@ -921,8 +921,16 @@ impl PipelineDef {
             None => quote! {},
         };
 
+        let path_validations: Vec<TokenStream2> = self
+            .allow_missing_paths
+            .iter()
+            .map(|p| quote! { ::rust_buildkite::validation::validate_path(#p); })
+            .collect();
+
         Ok(quote! {
             {
+                ::rust_buildkite::validation::init();
+                #(#path_validations)*
                 #(#const_ref_uses)*
                 
                 let __result: ::rust_buildkite::JsonSchemaForBuildkitePipelineConfigurationFiles = 
@@ -3588,6 +3596,7 @@ impl WaitStepDef {
     }
 }
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum CommandSource {
     Shell(CmdExpr),
     #[cfg(feature = "bazel")]
@@ -3699,6 +3708,59 @@ impl DynamicValue {
                 } else {
                     quote! { #expr }
                 }
+            }
+        }
+    }
+
+    #[cfg(feature = "bazel")]
+    fn is_runtime(&self) -> bool {
+        matches!(self, DynamicValue::Runtime(_))
+    }
+
+    #[cfg(feature = "bazel")]
+    fn to_tokens_with_target_validation(&self, var_name: &str) -> (TokenStream2, TokenStream2) {
+        let var_ident = syn::Ident::new(var_name, proc_macro2::Span::call_site());
+        let inner = self.to_tokens();
+        match self {
+            DynamicValue::Runtime(_) => {
+                let validation = quote! {
+                    let #var_ident = {
+                        let __val: String = (#inner).to_string();
+                        ::rust_buildkite::validation::validate_targets(&__val);
+                        __val
+                    };
+                };
+                let usage = quote! { #var_ident };
+                (validation, usage)
+            }
+            _ => {
+                (quote! {}, inner)
+            }
+        }
+    }
+
+    #[cfg(feature = "bazel")]
+    fn to_tokens_with_flags_validation(
+        &self,
+        verb: &str,
+        var_name: &str,
+    ) -> (TokenStream2, TokenStream2) {
+        let var_ident = syn::Ident::new(var_name, proc_macro2::Span::call_site());
+        let inner = self.to_tokens();
+        match self {
+            DynamicValue::Runtime(_) => {
+                let validation = quote! {
+                    let #var_ident = {
+                        let __val: String = (#inner).to_string();
+                        ::rust_buildkite::validation::validate_flags_str(#verb, &__val);
+                        __val
+                    };
+                };
+                let usage = quote! { #var_ident };
+                (validation, usage)
+            }
+            _ => {
+                (quote! {}, inner)
             }
         }
     }
@@ -3866,6 +3928,63 @@ impl CommandValue {
             CommandSource::Shell(_) => None,
             CommandSource::Bazel(bazel) => Some(&bazel.verb),
             CommandSource::DynamicBazel { base_cmd, .. } => Some(base_cmd.trim()),
+        }
+    }
+
+    #[cfg(feature = "bazel")]
+    fn to_dynamic_bazel_tokens(
+        &self,
+        cmd_idx: usize,
+    ) -> TokenStream2 {
+        match &self.0 {
+            CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
+                let verb = base_cmd.trim();
+                let flags_var = format!("__flags_{}", cmd_idx);
+                let target_var = format!("__target_{}", cmd_idx);
+
+                let (flags_validation, flags_tokens) = match flags {
+                    Some(dv) if dv.is_runtime() => {
+                        dv.to_tokens_with_flags_validation(verb, &flags_var)
+                    }
+                    Some(dv) => (quote! {}, dv.to_tokens()),
+                    None if !extra_flags.is_empty() => {
+                        let joined = extra_flags.join(" ");
+                        (quote! {}, quote! { #joined })
+                    }
+                    None => (quote! {}, quote! { "" }),
+                };
+
+                let (target_validation, target_tokens) = match target {
+                    Some(dv) if dv.is_runtime() => {
+                        dv.to_tokens_with_target_validation(&target_var)
+                    }
+                    Some(dv) => (quote! {}, dv.to_tokens()),
+                    None => (quote! {}, quote! { "" }),
+                };
+
+                let has_validation = flags.as_ref().map(|f| f.is_runtime()).unwrap_or(false)
+                    || target.as_ref().map(|t| t.is_runtime()).unwrap_or(false);
+
+                if has_validation {
+                    quote! {
+                        {
+                            #flags_validation
+                            #target_validation
+                            format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                                .split_whitespace().collect::<Vec<_>>().join(" ")
+                        }
+                    }
+                } else {
+                    quote! {
+                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                            .split_whitespace().collect::<Vec<_>>().join(" ")
+                    }
+                }
+            }
+            _ => {
+                let cmd_string = self.get_command_string();
+                quote! { #cmd_string.to_string() }
+            }
         }
     }
 }
@@ -4259,32 +4378,13 @@ impl CommandStepDef {
     fn to_tokens_inner(&self) -> TokenStream2 {
         assert!(!self.commands.is_empty(), "commands must not be empty");
         
-        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
-            match &cmd_value.0 {
-                #[cfg(feature = "bazel")]
-                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                    let flags_tokens = match flags {
-                        Some(dv) => dv.to_tokens(),
-                        None if !extra_flags.is_empty() => {
-                            let joined = extra_flags.join(" ");
-                            quote! { #joined }
-                        }
-                        None => quote! { "" },
-                    };
-                    let target_tokens = match target {
-                        Some(dv) => dv.to_tokens(),
-                        None => quote! { "" },
-                    };
-                    quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
-                            .split_whitespace().collect::<Vec<_>>().join(" ")
-                    }
-                }
-                _ => {
-                    let cmd_string = cmd_value.get_command_string();
-                    quote! { #cmd_string.to_string() }
-                }
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().enumerate().map(|(_idx, cmd_value)| {
+            #[cfg(feature = "bazel")]
+            if matches!(&cmd_value.0, CommandSource::DynamicBazel { .. }) {
+                return cmd_value.to_dynamic_bazel_tokens(_idx);
             }
+            let cmd_string = cmd_value.get_command_string();
+            quote! { #cmd_string.to_string() }
         }).collect();
         
         let command_tokens = if cmd_token_list.len() == 1 {
@@ -4578,32 +4678,13 @@ impl CommandStepDef {
 
         assert!(!self.commands.is_empty(), "commands must not be empty");
         
-        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
-            match &cmd_value.0 {
-                #[cfg(feature = "bazel")]
-                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                    let flags_tokens = match flags {
-                        Some(dv) => dv.to_tokens(),
-                        None if !extra_flags.is_empty() => {
-                            let joined = extra_flags.join(" ");
-                            quote! { #joined }
-                        }
-                        None => quote! { "" },
-                    };
-                    let target_tokens = match target {
-                        Some(dv) => dv.to_tokens(),
-                        None => quote! { "" },
-                    };
-                    quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
-                            .split_whitespace().collect::<Vec<_>>().join(" ")
-                    }
-                }
-                _ => {
-                    let cmd_string = cmd_value.get_command_string();
-                    quote! { #cmd_string.to_string() }
-                }
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().enumerate().map(|(_idx, cmd_value)| {
+            #[cfg(feature = "bazel")]
+            if matches!(&cmd_value.0, CommandSource::DynamicBazel { .. }) {
+                return cmd_value.to_dynamic_bazel_tokens(_idx);
             }
+            let cmd_string = cmd_value.get_command_string();
+            quote! { #cmd_string.to_string() }
         }).collect();
         
         let command_tokens = if cmd_token_list.len() == 1 {
@@ -5178,32 +5259,13 @@ impl CommandStepDef {
 
         assert!(!self.commands.is_empty(), "commands must not be empty");
         
-        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().map(|cmd_value| {
-            match &cmd_value.0 {
-                #[cfg(feature = "bazel")]
-                CommandSource::DynamicBazel { base_cmd, flags, extra_flags, target } => {
-                    let flags_tokens = match flags {
-                        Some(dv) => dv.to_tokens(),
-                        None if !extra_flags.is_empty() => {
-                            let joined = extra_flags.join(" ");
-                            quote! { #joined }
-                        }
-                        None => quote! { "" },
-                    };
-                    let target_tokens = match target {
-                        Some(dv) => dv.to_tokens(),
-                        None => quote! { "" },
-                    };
-                    quote! {
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
-                            .split_whitespace().collect::<Vec<_>>().join(" ")
-                    }
-                }
-                _ => {
-                    let cmd_string = cmd_value.get_command_string();
-                    quote! { #cmd_string.to_string() }
-                }
+        let cmd_token_list: Vec<TokenStream2> = self.commands.iter().enumerate().map(|(_idx, cmd_value)| {
+            #[cfg(feature = "bazel")]
+            if matches!(&cmd_value.0, CommandSource::DynamicBazel { .. }) {
+                return cmd_value.to_dynamic_bazel_tokens(_idx);
             }
+            let cmd_string = cmd_value.get_command_string();
+            quote! { #cmd_string.to_string() }
         }).collect();
         
         let command_tokens = if cmd_token_list.len() == 1 {

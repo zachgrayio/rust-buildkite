@@ -2336,6 +2336,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "starlark",
  "syn 2.0.114",
  "tempfile",
  "time",

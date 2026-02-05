@@ -154,6 +154,8 @@ pub use inventory;
 pub mod registry;
 pub use registry::*;
 
+pub mod validation;
+
 /// Discovers all available commands from the host machine's PATH at compile time.
 ///
 /// Note: The `pipeline!` macro automatically uses host PATH discovery by default,
@@ -203,7 +205,8 @@ pub fn host_path_commands() {
     dead_code,
     clippy::derivable_impls,
     clippy::must_use_candidate,
-    clippy::infallible_try_from
+    clippy::infallible_try_from,
+    clippy::large_enum_variant
 )]
 mod codegen {
     include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
