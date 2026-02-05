@@ -1890,6 +1890,7 @@ impl StepDef {
         let mut target_patterns_span: Option<proc_macro2::Span> = None;
         let mut flags_value: Option<DynamicValue> = None;
         let mut extra_flags: Vec<String> = Vec::new();
+        let mut args: Vec<String> = Vec::new();
         let mut validate_targets = true;
         let mut dry_run = false;
         let mut step_custom_verbs: Vec<String> = Vec::new();
@@ -1994,6 +1995,22 @@ impl StepDef {
                 "dry_run" => {
                     let val: syn::LitBool = content.parse()?;
                     dry_run = val.value();
+                }
+                "args" => {
+                    if content.peek(syn::token::Bracket) {
+                        let args_content;
+                        bracketed!(args_content in content);
+                        while !args_content.is_empty() {
+                            let arg: LitStr = args_content.parse()?;
+                            args.push(arg.value());
+                            if args_content.peek(Token![,]) {
+                                args_content.parse::<Token![,]>()?;
+                            }
+                        }
+                    } else {
+                        let arg: LitStr = content.parse()?;
+                        args.push(arg.value());
+                    }
                 }
                 "custom_verbs" => {
                     let verbs_content;
@@ -2162,6 +2179,20 @@ impl StepDef {
                 }
             }
 
+            if validate_targets {
+                if let Some(ref t) = target_str {
+                    if !t.is_empty() {
+                        if let Ok((workspace, script_dir)) = bazel::find_bazel_workspace_and_script_dir() {
+                            let current_pkg = targets::get_current_package(&workspace, &script_dir);
+                            let target_args: Vec<&str> = t.split_whitespace().collect();
+                            if let Err(e) = bazel::fast_validate_targets(&target_args, &workspace, current_pkg.as_deref()) {
+                                return Err(Error::new(target_patterns_span.unwrap_or(step_span), e));
+                            }
+                        }
+                    }
+                }
+            }
+
             let has_subtraction = target_str.as_ref().map_or(false, |t| {
                 t.split_whitespace().any(|p| {
                     p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:")
@@ -2191,6 +2222,12 @@ impl StepDef {
                 }
                 cmd_parts.push(t.clone());
             }
+
+            if !args.is_empty() {
+                cmd_parts.push("--".to_string());
+                cmd_parts.extend(args.clone());
+            }
+
             let bazel_cmd = cmd_parts.join(" ");
 
             let lit = LitStr::new(&bazel_cmd, step_span);
@@ -7156,6 +7193,131 @@ impl BazelExpr {
         let cmd = format!("bazel {}", &self.command);
         quote! { #cmd.to_string() }
     }
+}
+
+fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+fn snake_to_title(s: &str) -> String {
+    s.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+struct PipelineDefAttr {
+    branch: Option<TokenStream2>,
+    cron: Option<String>,
+}
+
+impl Parse for PipelineDefAttr {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut branch = None;
+        let mut cron = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "branch" => {
+                    let tokens: TokenStream2 = if input.peek(Ident) {
+                        let variant: Ident = input.parse()?;
+                        let variant_str = variant.to_string();
+                        if input.peek(syn::token::Paren) {
+                            let content;
+                            syn::parenthesized!(content in input);
+                            let arg: TokenStream2 = content.parse()?;
+                            quote! { ::rust_buildkite::BranchPattern::#variant(#arg) }
+                        } else {
+                            return Err(Error::new(
+                                variant.span(),
+                                format!("BranchPattern::{} requires arguments", variant_str),
+                            ));
+                        }
+                    } else {
+                        return Err(Error::new(input.span(), "expected BranchPattern variant"));
+                    };
+                    branch = Some(tokens);
+                }
+                "cron" => {
+                    let lit: LitStr = input.parse()?;
+                    cron = Some(lit.value());
+                }
+                other => {
+                    return Err(Error::new(key.span(), format!("unknown attribute: {}", other)));
+                }
+            }
+
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(PipelineDefAttr {
+            branch,
+            cron,
+        })
+    }
+}
+
+#[proc_macro_attribute]
+pub fn register(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = match syn::parse::<PipelineDefAttr>(attr) {
+        Ok(a) => a,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let func = match syn::parse::<syn::ItemFn>(item) {
+        Ok(f) => f,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let fn_name = &func.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let id = snake_to_pascal(&fn_name_str);
+    let name = snake_to_title(&fn_name_str);
+
+    let branch_tokens = match &attr.branch {
+        Some(b) => quote! { Some(#b) },
+        None => quote! { None },
+    };
+
+    let cron_tokens = match &attr.cron {
+        Some(c) => quote! { Some(#c) },
+        None => quote! { None },
+    };
+
+    let output = quote! {
+        #func
+
+        ::rust_buildkite::inventory::submit! {
+            ::rust_buildkite::PipelineRegistration {
+                id: #id,
+                name: #name,
+                generate: #fn_name,
+                branch: #branch_tokens,
+                cron: #cron_tokens,
+            }
+        }
+    };
+
+    output.into()
 }
 
 #[cfg(all(test, feature = "bazel"))]

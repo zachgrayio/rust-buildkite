@@ -13,6 +13,8 @@ fn ui_tests() {
     t.compile_fail("tests/ui/raw_string_rejected.rs");
     t.compile_fail("tests/ui/undefined_env_var.rs");
     t.compile_fail("tests/ui/undefined_variable.rs");
+    t.compile_fail("tests/ui/register_on_struct.rs");
+    t.compile_fail("tests/ui/register_unknown_attr.rs");
 
     #[cfg(feature = "bazel")]
     {

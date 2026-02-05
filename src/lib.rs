@@ -144,10 +144,15 @@
 // allowed in fields like env, retry, plugins, etc. maybe can clean those types up later.
 pub use serde_json;
 
-pub use rust_buildkite_macros::{cmd, pipeline};
+pub use rust_buildkite_macros::{cmd, pipeline, register};
 
 #[cfg(feature = "bazel")]
 pub use rust_buildkite_macros::{bazel, comptime, comptime_shell, runtime};
+
+pub use inventory;
+
+pub mod registry;
+pub use registry::*;
 
 /// Discovers all available commands from the host machine's PATH at compile time.
 ///
