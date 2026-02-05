@@ -1268,23 +1268,41 @@ impl PipelineDef {
     }
 
     fn collect_used_env_vars(&self, steps: &[StepDef]) -> HashSet<String> {
+        let mut allowed: HashSet<String> = HashSet::new();
+        if let Some(env_vars) = &self.env {
+            for (name, _) in env_vars {
+                allowed.insert(name.to_string());
+            }
+        }
+
         let mut used = HashSet::new();
-        self.collect_used_env_vars_from_steps(steps, &mut used);
+        self.collect_used_env_vars_from_steps(steps, &allowed, &mut used);
         used
     }
 
-    fn collect_used_env_vars_from_steps(&self, steps: &[StepDef], used: &mut HashSet<String>) {
+    fn collect_used_env_vars_from_steps(
+        &self,
+        steps: &[StepDef],
+        allowed: &HashSet<String>,
+        used: &mut HashSet<String>,
+    ) {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
+                    let mut step_allowed = allowed.clone();
+                    for (name, _) in &cmd_step.env {
+                        step_allowed.insert(name.clone());
+                    }
                     for cmd_value in &cmd_step.commands {
                         for var in cmd_value.get_undefined_vars() {
-                            used.insert(var.clone());
+                            if !step_allowed.contains(var) {
+                                used.insert(var.clone());
+                            }
                         }
                     }
                 }
                 StepDef::Group(group) => {
-                    self.collect_used_env_vars_from_steps(&group.steps, used);
+                    self.collect_used_env_vars_from_steps(&group.steps, allowed, used);
                 }
                 _ => {}
             }
