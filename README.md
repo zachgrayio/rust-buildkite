@@ -253,6 +253,45 @@ and then:
 include!(concat!(env!("OUT_DIR"), "/links.rs"));
 ```
 
+## Validation Control
+
+### Skipping Compile-Time Validation
+
+For Bazel builds or sandboxed environments where file paths aren't available at compile time:
+
+```python
+# In your BUILD file
+rust_library(
+    name = "pipeline",
+    rustc_env = {
+        "BUILDKITE_SKIP_COMPTIME_VALIDATION": "1",
+    },
+    deps = ["@crates//:rust-buildkite"],
+)
+```
+
+This skips path existence, command allowlist, Bazel target, and env var validation at compile time. Runtime validation is still performed when the binary runs.
+
+### Skipping Runtime Validation
+
+For testing or special cases:
+
+```bash
+BUILDKITE_SKIP_RUNTIME_VALIDATION=1 ./my_pipeline
+```
+
+## Development
+
+### Running Tests
+
+Tests are configured via `.cargo/config.toml` to automatically skip runtime validation:
+
+```bash
+cargo test --workspace --all-features
+```
+
+UI tests verify compile-time validation errors, so `BUILDKITE_SKIP_COMPTIME_VALIDATION` should NOT be set when running tests.
+
 # Roadmap
 
 - [ ] create a CI pipeline and releases

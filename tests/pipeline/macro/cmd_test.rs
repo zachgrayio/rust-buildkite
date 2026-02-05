@@ -219,6 +219,15 @@ mod allowed_commands {
 
     #[test]
     fn path_command_in_allowlist() {
+        // Create the script file so runtime validation passes
+        let script_path = std::path::Path::new("./deploy.sh");
+        std::fs::write(script_path, "#!/bin/bash\necho deploy").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
         let pipeline = pipeline! {
             allowed_commands: ["./deploy.sh", "/usr/bin/env"],
             allow_missing_paths: ["./deploy.sh"],
@@ -230,6 +239,9 @@ mod allowed_commands {
 
         let yaml = serde_yaml::to_string(&pipeline).unwrap();
         assert!(yaml.contains("./deploy.sh production"));
+
+        // Clean up
+        let _ = std::fs::remove_file(script_path);
     }
 
     #[test]
@@ -685,5 +697,36 @@ mod pipeline_properties {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("priority"));
+    }
+}
+
+/// Tests for BUILDKITE_SKIP_COMPTIME_VALIDATION with shell commands.
+mod skip_comptime_validation {
+    use super::*;
+
+    #[test]
+    fn cmd_macro_still_works() {
+        let c = cmd!("echo hello world");
+        assert_eq!(c, "echo hello world");
+    }
+
+    #[test]
+    fn cmd_with_path_still_works() {
+        // Path validation happens at runtime when skip_comptime is set
+        let c = cmd!("./some_script.sh --flag");
+        assert_eq!(c, "./some_script.sh --flag");
+    }
+
+    #[test]
+    fn pipeline_with_commands() {
+        let p = pipeline! {
+            steps: [
+                command(cmd!("npm install")).key("install"),
+                command(cmd!("npm test")).key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("npm test"));
     }
 }

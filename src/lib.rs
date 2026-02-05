@@ -139,6 +139,10 @@
 //! - Invalid regex patterns
 //! - Syntax errors in expressions
 //!
+//! Skipping Compile-Time Validation
+//!
+//! For Bazel builds or other sandboxed environments where file paths aren't
+//! available at compile time, set `BUILDKITE_SKIP_COMPTIME_VALIDATION=1`:
 
 // nb: re-export required because the pipeline macro needs this for the unconstrainted raw json
 // allowed in fields like env, retry, plugins, etc. maybe can clean those types up later.

@@ -65,7 +65,7 @@ pub mod options {
     tonic::include_proto!("options");
 }
 
-use build_event_stream::{build_event::Payload, build_event_id::Id, BuildEvent};
+use build_event_stream::{BuildEvent, build_event::Payload, build_event_id::Id};
 
 #[derive(Debug, Default)]
 pub struct DryRunResult {
@@ -82,8 +82,10 @@ pub struct DryRunResult {
 fn parse_bep_file(path: &Path) -> io::Result<DryRunResult> {
     let file = std::fs::File::open(path)?;
     let mut reader = BufReader::new(file);
-    let mut result = DryRunResult::default();
-    result.success = true;
+    let mut result = DryRunResult {
+        success: true,
+        ..Default::default()
+    };
 
     loop {
         let length = match read_varint(&mut reader) {
@@ -122,7 +124,10 @@ fn read_varint<R: Read>(reader: &mut R) -> io::Result<usize> {
         }
 
         if shift >= 64 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "varint too long"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "varint too long",
+            ));
         }
     }
 
@@ -130,24 +135,23 @@ fn read_varint<R: Read>(reader: &mut R) -> io::Result<usize> {
 }
 
 fn process_event(event: &BuildEvent, result: &mut DryRunResult) {
-    if let Some(id) = &event.id {
-        if let Some(Id::Pattern(_)) = &id.id {
-            for child in &event.children {
-                if let Some(child_id) = &child.id {
-                    match child_id {
-                        Id::TargetConfigured(tc) => {
-                            if !tc.label.is_empty() {
-                                result.expanded_targets.push(tc.label.clone());
-                            }
+    if let Some(id) = &event.id
+        && let Some(Id::Pattern(_)) = &id.id
+    {
+        for child in &event.children {
+            if let Some(child_id) = &child.id {
+                match child_id {
+                    Id::TargetConfigured(tc) => {
+                        if !tc.label.is_empty() {
+                            result.expanded_targets.push(tc.label.clone());
                         }
-                        Id::TargetCompleted(tc) => {
-                            if !tc.label.is_empty() && !result.expanded_targets.contains(&tc.label)
-                            {
-                                result.expanded_targets.push(tc.label.clone());
-                            }
-                        }
-                        _ => {}
                     }
+                    Id::TargetCompleted(tc) => {
+                        if !tc.label.is_empty() && !result.expanded_targets.contains(&tc.label) {
+                            result.expanded_targets.push(tc.label.clone());
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -162,20 +166,19 @@ fn process_event(event: &BuildEvent, result: &mut DryRunResult) {
                 result.explicit_options = options.explicit_cmd_line.clone();
             }
             Payload::Configured(configured) => {
-                if let Some(id) = &event.id {
-                    if let Some(Id::TargetConfigured(tc)) = &id.id {
-                        if !tc.label.is_empty() && !configured.target_kind.is_empty() {
-                            result
-                                .target_kinds
-                                .insert(tc.label.clone(), configured.target_kind.clone());
-                        }
-                    }
+                if let Some(id) = &event.id
+                    && let Some(Id::TargetConfigured(tc)) = &id.id
+                    && !tc.label.is_empty()
+                    && !configured.target_kind.is_empty()
+                {
+                    result
+                        .target_kinds
+                        .insert(tc.label.clone(), configured.target_kind.clone());
                 }
             }
             Payload::Aborted(aborted) => {
                 use build_event_stream::aborted::AbortReason;
-                let reason =
-                    AbortReason::try_from(aborted.reason).unwrap_or(AbortReason::Unknown);
+                let reason = AbortReason::try_from(aborted.reason).unwrap_or(AbortReason::Unknown);
                 if reason != AbortReason::NoBuild && reason != AbortReason::NoAnalyze {
                     if !aborted.description.is_empty() {
                         result.errors.push(aborted.description.clone());
@@ -199,11 +202,7 @@ fn process_event(event: &BuildEvent, result: &mut DryRunResult) {
     }
 }
 
-pub fn dry_run(
-    verb: &str,
-    args: &[&str],
-    workspace: &Path,
-) -> Result<DryRunResult, String> {
+pub fn dry_run(verb: &str, args: &[&str], workspace: &Path) -> Result<DryRunResult, String> {
     use std::process::Command;
 
     let bep_file = std::env::temp_dir().join(format!("bep_dry_run_{}.bin", std::process::id()));
@@ -218,10 +217,7 @@ pub fn dry_run(
     }
 
     cmd.args(args);
-    cmd.arg(format!(
-        "--build_event_binary_file={}",
-        bep_file.display()
-    ));
+    cmd.arg(format!("--build_event_binary_file={}", bep_file.display()));
 
     debug_log!("bep", "Dry run: {:?}", cmd);
     let start = Instant::now();
@@ -261,11 +257,15 @@ pub fn dry_run(
         }
     }
 
-    if let Some(exit_code) = result.exit_code {
-        if exit_code != 0 && !using_nobuild {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Dry run failed with exit code {}: {}", exit_code, stderr));
-        }
+    if let Some(exit_code) = result.exit_code
+        && exit_code != 0
+        && !using_nobuild
+    {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Dry run failed with exit code {}: {}",
+            exit_code, stderr
+        ));
     }
 
     Ok(result)

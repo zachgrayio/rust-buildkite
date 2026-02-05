@@ -2331,12 +2331,12 @@ dependencies = [
  "regress",
  "reqwest",
  "rust-buildkite-macros",
+ "rust-buildkite-validation",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
- "starlark",
  "syn 2.0.114",
  "tempfile",
  "time",
@@ -2359,12 +2359,20 @@ dependencies = [
  "prost-types",
  "quote",
  "regex",
+ "rust-buildkite-validation",
  "serde",
  "serde_json",
- "starlark",
  "syn 2.0.114",
  "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "rust-buildkite-validation"
+version = "0.1.0"
+dependencies = [
+ "starlark",
+ "tempfile",
 ]
 
 [[package]]

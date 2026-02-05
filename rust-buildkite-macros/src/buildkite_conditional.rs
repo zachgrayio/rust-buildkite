@@ -105,7 +105,12 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 Some(c) => s.push(c),
-                None => return Err(format!("Unterminated string starting at position {}", self.position)),
+                None => {
+                    return Err(format!(
+                        "Unterminated string starting at position {}",
+                        self.position
+                    ));
+                }
             }
         }
         Ok(s)
@@ -314,7 +319,10 @@ impl<'a> Parser<'a> {
             self.errors.push(e);
         }
         if self.current != Token::Eof {
-            self.errors.push(format!("Unexpected token after expression: {:?}", self.current));
+            self.errors.push(format!(
+                "Unexpected token after expression: {:?}",
+                self.current
+            ));
         }
         if self.errors.is_empty() {
             Ok(())
@@ -368,7 +376,11 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> Result<(), String> {
         match &self.current {
-            Token::True | Token::False | Token::Integer(_) | Token::String(_) | Token::Regex(_, _) => {
+            Token::True
+            | Token::False
+            | Token::Integer(_)
+            | Token::String(_)
+            | Token::Regex(_, _) => {
                 if let Token::Regex(pattern, flags) = &self.current {
                     let pattern = pattern.clone();
                     let flags = flags.clone();
@@ -457,9 +469,9 @@ impl<'a> Parser<'a> {
     }
 
     fn validate_reference(&mut self, ref_path: &str) -> Result<(), String> {
-        let is_known = KNOWN_REFS.iter().any(|r| {
-            ref_path == *r || ref_path.starts_with(&format!("{}.", r))
-        });
+        let is_known = KNOWN_REFS
+            .iter()
+            .any(|r| ref_path == *r || ref_path.starts_with(&format!("{}.", r)));
         if !is_known {
             let root = ref_path.split('.').next().unwrap_or("");
             if root != "build" && root != "pipeline" {
@@ -514,7 +526,12 @@ mod tests {
 
     #[test]
     fn test_parentheses() {
-        assert!(validate_condition("(build.branch == 'main' || build.branch == 'develop') && build.state == 'passed'").is_ok());
+        assert!(
+            validate_condition(
+                "(build.branch == 'main' || build.branch == 'develop') && build.state == 'passed'"
+            )
+            .is_ok()
+        );
     }
 
     #[test]

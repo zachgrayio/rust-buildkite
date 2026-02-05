@@ -1,0 +1,15 @@
+[package]
+name = "rust-buildkite-validation"
+version = "0.1.0"
+edition = "2024"
+description = "Shared validation logic for rust-buildkite"
+
+[features]
+default = []
+bazel = ["starlark"]
+
+[dependencies]
+starlark = { version = "0.13", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
