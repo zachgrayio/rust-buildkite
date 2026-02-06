@@ -1,6 +1,6 @@
 error: Environment variable 'MY_UNDEFINED_VAR' is not defined.
        Add it to pipeline env: env: { MY_UNDEFINED_VAR: "value" }
-       Or allow it: runtime_env: ["MY_UNDEFINED_VAR"]
+       Or allow it: expect_env: ["MY_UNDEFINED_VAR"]
   --> tests/ui/undefined_env_var.rs:12:26
    |
 12 |             command(cmd!("echo \"$MY_UNDEFINED_VAR\"")).key("test")

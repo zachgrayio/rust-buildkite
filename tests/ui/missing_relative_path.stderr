@@ -1,5 +1,5 @@
 error: Command path './nonexistent-script.sh' does not exist on the build machine.
-       If this path will exist at runtime, add it to allow_missing_paths.
+       If this path will exist at runtime, add it to expect_paths.
  --> tests/ui/missing_relative_path.rs:8:26
   |
 8 |             command(cmd!("./nonexistent-script.sh")).key("script")

@@ -12,7 +12,7 @@
 //!
 //! let p = pipeline! {
 //!     env: { CI: "true" },
-//!     allow_missing_paths: ["./deploy.sh"],
+//!     expect_paths: ["./deploy.sh"],
 //!     steps: [
 //!         command(cmd!("echo hello")).label("Say Hello").key("hello"),
 //!         command(cmd!("cat README.md")).key("tests").depends_on("hello"),
@@ -63,14 +63,14 @@
 //! ## Path Validation
 //!
 //! Path-based commands (`./script.sh`, `/usr/bin/env`) are validated to exist
-//! at compile time. For paths that only exist at runtime, use `allow_missing_paths`:
+//! at compile time. For paths that only exist at runtime, use `expect_paths`:
 //!
 //! ```no_run
 //! use rust_buildkite::pipeline;
 //!
 //! let p = pipeline! {
 //!     // Skip validation for paths that don't exist on the build machine
-//!     allow_missing_paths: ["./deploy.sh", "./scripts/setup.sh"],
+//!     expect_paths: ["./deploy.sh", "./scripts/setup.sh"],
 //!     steps: [
 //!         command(cmd!("./deploy.sh production")).key("deploy"),
 //!     ]
@@ -139,6 +139,10 @@
 //! - Invalid regex patterns
 //! - Syntax errors in expressions
 //!
+//! Skipping Compile-Time Validation
+//!
+//! For Bazel builds or other sandboxed environments where file paths aren't
+//! available at compile time, set `BUILDKITE_SKIP_COMPTIME_VALIDATION=1`:
 
 // nb: re-export required because the pipeline macro needs this for the unconstrainted raw json
 // allowed in fields like env, retry, plugins, etc. maybe can clean those types up later.
@@ -153,6 +157,8 @@ pub use inventory;
 
 pub mod registry;
 pub use registry::*;
+
+pub mod validation;
 
 /// Discovers all available commands from the host machine's PATH at compile time.
 ///
@@ -203,7 +209,8 @@ pub fn host_path_commands() {
     dead_code,
     clippy::derivable_impls,
     clippy::must_use_candidate,
-    clippy::infallible_try_from
+    clippy::infallible_try_from,
+    clippy::large_enum_variant
 )]
 mod codegen {
     include!(concat!(env!("OUT_DIR"), "/codegen.rs"));

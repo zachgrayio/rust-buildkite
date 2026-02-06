@@ -66,12 +66,10 @@ fn main() {
             CARGO_TERM_COLOR: "always"
         },
 
-        // additional runtime environment variables that commands are allowed to reference, aside from those in the env block.
-        //  - these are validated at compile time - undefined vars cause errors. 
-        //  - if not supplied, defaults to host env; including these here allows this to build on non-CI machines
-        //  - SHELL_ENV, BUILDKITE_ENV, CI_ENV are keywords that expand to known values for convenience.
-        // nb: this could be omitted entirely to validate against the host env during compilation!
-        runtime_env: [SHELL_ENV, BUILDKITE_ENV],
+        // expected environment variables - allowed at compile-time, validated at runtime if used
+        //  - SHELL_ENV, BUILDKITE_ENV are keywords that expand to known values
+        //  - if omitted, defaults to host env at compile time
+        expect_env: [SHELL_ENV, BUILDKITE_ENV],
 
         // commands use host PATH by default for compile time validation of commands;
         // you can override this with an explicit allowed_commands list:
@@ -79,7 +77,7 @@ fn main() {
 
         // declare paths that don't exist at compile time to allow them to be used at runtime
         // again these will be validated at runtime on the CI worker, but we need it here to allow the pipeline to build on non-CI machines
-        allow_missing_paths: ["./scripts/deploy.sh"],
+        expect_paths: ["./scripts/deploy.sh"],
 
         steps: [
             command {
@@ -252,6 +250,45 @@ and then:
 ```rust
 include!(concat!(env!("OUT_DIR"), "/links.rs"));
 ```
+
+## Validation Control
+
+### Skipping Compile-Time Validation
+
+For Bazel builds or sandboxed environments where file paths aren't available at compile time:
+
+```python
+# In your BUILD file
+rust_library(
+    name = "pipeline",
+    rustc_env = {
+        "BUILDKITE_SKIP_COMPTIME_VALIDATION": "1",
+    },
+    deps = ["@crates//:rust-buildkite"],
+)
+```
+
+This skips path existence, command allowlist, Bazel target, and env var validation at compile time. Runtime validation is still performed when the binary runs.
+
+### Skipping Runtime Validation
+
+For testing or special cases:
+
+```bash
+BUILDKITE_SKIP_RUNTIME_VALIDATION=1 ./my_pipeline
+```
+
+## Development
+
+### Running Tests
+
+Tests are configured via `.cargo/config.toml` to automatically skip runtime validation:
+
+```bash
+cargo test --workspace --all-features
+```
+
+UI tests verify compile-time validation errors, so `BUILDKITE_SKIP_COMPTIME_VALIDATION` should NOT be set when running tests.
 
 # Roadmap
 

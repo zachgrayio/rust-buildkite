@@ -219,9 +219,18 @@ mod allowed_commands {
 
     #[test]
     fn path_command_in_allowlist() {
+        // Create the script file so runtime validation passes
+        let script_path = std::path::Path::new("./deploy.sh");
+        std::fs::write(script_path, "#!/bin/bash\necho deploy").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
         let pipeline = pipeline! {
             allowed_commands: ["./deploy.sh", "/usr/bin/env"],
-            allow_missing_paths: ["./deploy.sh"],
+            expect_paths: ["./deploy.sh"],
             steps: [
                 command(cmd!("./deploy.sh production")).key("deploy"),
                 command(cmd!("/usr/bin/env bash -c 'echo hi'")).key("bash")
@@ -230,6 +239,9 @@ mod allowed_commands {
 
         let yaml = serde_yaml::to_string(&pipeline).unwrap();
         assert!(yaml.contains("./deploy.sh production"));
+
+        // Clean up
+        let _ = std::fs::remove_file(script_path);
     }
 
     #[test]
@@ -298,7 +310,7 @@ mod allowed_commands {
     }
 }
 
-mod runtime_env {
+mod expect_env {
     use super::*;
 
     #[test]
@@ -331,9 +343,9 @@ mod runtime_env {
     }
 
     #[test]
-    fn runtime_env_permits_vars() {
+    fn expect_env_permits_vars() {
         let pipeline = pipeline! {
-            runtime_env: ["HOME", "PATH", "USER"],
+            expect_env: ["HOME", "PATH", "USER"],
             steps: [
                 command(cmd!(r#"echo "$HOME" "$PATH" "$USER""#)).key("test")
             ]
@@ -349,7 +361,7 @@ mod runtime_env {
             env: {
                 PIPELINE_VAR: "p"
             },
-            runtime_env: ["ALLOWED_VAR"],
+            expect_env: ["ALLOWED_VAR"],
             steps: [
                 command(cmd!(r#"echo "$PIPELINE_VAR" "$STEP_VAR" "$ALLOWED_VAR""#))
                     .key("test")
@@ -366,7 +378,7 @@ mod runtime_env {
     #[test]
     fn shell_builtins_allowed() {
         let pipeline = pipeline! {
-            runtime_env: ["HOME", "PROJECT_DIR"],
+            expect_env: ["HOME", "PROJECT_DIR"],
             steps: [
                 command(cmd!(r#"cd "$HOME" && pwd"#)).key("cd"),
                 command(cmd!("export FOO=bar")).key("export"),
@@ -389,7 +401,7 @@ mod runtime_env {
     }
 
     #[test]
-    fn default_to_host_env_when_runtime_env_not_specified() {
+    fn default_to_host_env_when_expect_env_not_specified() {
         let pipeline = pipeline! {
             steps: [
                 command(cmd!(r#"echo "$HOME""#)).key("home"),
@@ -433,7 +445,7 @@ mod bashrs_behavior {
     #[test]
     fn var_with_default_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "${VAR:-fallback}""#)).key("test")
             ]
@@ -445,7 +457,7 @@ mod bashrs_behavior {
     #[test]
     fn simple_var_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "$VAR""#)).key("test")
             ]
@@ -457,7 +469,7 @@ mod bashrs_behavior {
     #[test]
     fn braced_var_in_pipeline() {
         let pipeline = pipeline! {
-            runtime_env: ["VAR"],
+            expect_env: ["VAR"],
             steps: [
                 command(cmd!(r#"echo "${VAR}""#)).key("test")
             ]
@@ -685,5 +697,36 @@ mod pipeline_properties {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("priority"));
+    }
+}
+
+/// Tests for BUILDKITE_SKIP_COMPTIME_VALIDATION with shell commands.
+mod skip_comptime_validation {
+    use super::*;
+
+    #[test]
+    fn cmd_macro_still_works() {
+        let c = cmd!("echo hello world");
+        assert_eq!(c, "echo hello world");
+    }
+
+    #[test]
+    fn cmd_with_path_still_works() {
+        // Path validation happens at runtime when skip_comptime is set
+        let c = cmd!("./some_script.sh --flag");
+        assert_eq!(c, "./some_script.sh --flag");
+    }
+
+    #[test]
+    fn pipeline_with_commands() {
+        let p = pipeline! {
+            steps: [
+                command(cmd!("npm install")).key("install"),
+                command(cmd!("npm test")).key("test")
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("npm install"));
+        assert!(yaml.contains("npm test"));
     }
 }

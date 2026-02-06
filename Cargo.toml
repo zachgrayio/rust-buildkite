@@ -1,3 +1,10 @@
+[workspace]
+members = [
+    ".",
+    "rust-buildkite-macros",
+    "rust-buildkite-validation",
+]
+
 [package]
 name = "rust-buildkite"
 version = "0.1.0"
@@ -5,13 +12,14 @@ edition = "2024"
 
 [features]
 default = []
-bazel = ["rust-buildkite-macros/bazel"]
+bazel = ["rust-buildkite-macros/bazel", "rust-buildkite-validation/bazel"]
 
 [dependencies]
 async-trait = "0.1"
 inventory = "0.3"
 regress = "0.10"
 rust-buildkite-macros = { path = "rust-buildkite-macros" }
+rust-buildkite-validation = { path = "rust-buildkite-validation" }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -37,6 +45,7 @@ typify = { git = "https://github.com/zachgrayio/typify", branch = "mixed-types-a
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
+ctor = "0.4"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }

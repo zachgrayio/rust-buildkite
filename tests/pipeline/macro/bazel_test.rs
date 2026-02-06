@@ -1905,3 +1905,55 @@ mod bazel_flag_shorthands {
         assert!(yaml.contains("--build_tag_filters=-foo,-bar"));
     }
 }
+
+/// Tests for BUILDKITE_SKIP_COMPTIME_VALIDATION environment variable.
+mod skip_comptime_validation {
+    use super::*;
+
+    #[test]
+    fn bazel_macro_still_works() {
+        // Even with skip_comptime, the macro should produce valid output
+        let c = bazel!("build //some/target:name");
+        assert_eq!(c, "bazel build //some/target:name");
+    }
+
+    #[test]
+    fn bazel_macro_with_flags() {
+        let c = bazel!("test //... --jobs=4 --test_output=errors");
+        assert_eq!(c, "bazel test //... --jobs=4 --test_output=errors");
+    }
+
+    #[test]
+    fn pipeline_with_bazel_commands() {
+        let p = pipeline! {
+            steps: [
+                bazel_build {
+                    target_patterns: "//app:main",
+                    label: "Build",
+                    key: "build"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("bazel build //app:main"));
+    }
+
+    #[test]
+    fn pipeline_with_dynamic_targets() {
+        fn get_target() -> String {
+            "//dynamic:target".to_string()
+        }
+
+        let p = pipeline! {
+            steps: [
+                bazel_build {
+                    target_patterns: runtime!(get_target()),
+                    label: "Dynamic",
+                    key: "dynamic"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//dynamic:target"));
+    }
+}
