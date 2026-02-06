@@ -2546,6 +2546,7 @@ impl StepDef {
                         let mut target_patterns_span: Option<proc_macro2::Span> = None;
                         let mut flags_value: Option<DynamicValue> = None;
                         let mut extra_flags: Vec<String> = Vec::new();
+                        let mut cmd_args: Vec<String> = Vec::new();
                         let mut cmd_validate_targets = validate_targets;
                         let mut cmd_dry_run = dry_run;
 
@@ -2659,6 +2660,22 @@ impl StepDef {
                                     let val: syn::LitBool = cmd_content.parse()?;
                                     cmd_dry_run = val.value();
                                 }
+                                "args" => {
+                                    if cmd_content.peek(syn::token::Bracket) {
+                                        let args_content;
+                                        bracketed!(args_content in cmd_content);
+                                        while !args_content.is_empty() {
+                                            let arg: LitStr = args_content.parse()?;
+                                            cmd_args.push(arg.value());
+                                            if args_content.peek(Token![,]) {
+                                                args_content.parse::<Token![,]>()?;
+                                            }
+                                        }
+                                    } else {
+                                        let arg: LitStr = cmd_content.parse()?;
+                                        cmd_args.push(arg.value());
+                                    }
+                                }
                                 other => {
                                     return Err(Error::new(
                                         cmd_field.span(),
@@ -2736,6 +2753,12 @@ impl StepDef {
                                 }
                                 cmd_parts.push(t.clone());
                             }
+
+                            if !cmd_args.is_empty() {
+                                cmd_parts.push("--".to_string());
+                                cmd_parts.extend(cmd_args.clone());
+                            }
+
                             let bazel_cmd = cmd_parts.join(" ");
 
                             let lit = LitStr::new(&bazel_cmd, step_span);

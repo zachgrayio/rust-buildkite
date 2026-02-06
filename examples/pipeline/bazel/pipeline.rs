@@ -62,9 +62,13 @@ fn main() {
                         target_patterns: "//...",
                         test_tag_filters: ["-foo", "-bar"],
                         config: "ci"
+                    },
+                    bazel_run {
+                        target_patterns: "//tools/ci:publish",
+                        args: ["--bucket", "artifacts", "--region", "us-west-2"]
                     }
                 ],
-                label: "Build and Test",
+                label: "Build, Test, and Publish",
                 key: "build_test"
             },
 

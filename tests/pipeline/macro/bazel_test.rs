@@ -1619,6 +1619,31 @@ mod bazel_commands_step {
     }
 
     #[test]
+    fn bazel_commands_with_args() {
+        let p = pipeline! {
+            steps: [
+                bazel_commands {
+                    commands: [
+                        bazel_run {
+                            target_patterns: "//tools/ci:publish",
+                            args: ["--bucket", "my-bucket", "--region", "us-west-2"]
+                        },
+                        bazel_run {
+                            target_patterns: "//tools/ci:notify",
+                            config: "ci",
+                            args: ["--channel", "#builds"]
+                        }
+                    ],
+                    label: "Publish and Notify"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("-- --bucket my-bucket --region us-west-2"));
+        assert!(yaml.contains("-- --channel #builds"));
+    }
+
+    #[test]
     fn bazel_commands_with_env() {
         let p = pipeline! {
             steps: [
