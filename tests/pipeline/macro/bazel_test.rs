@@ -1644,6 +1644,27 @@ mod structured_bazel_in_commands {
     }
 
     #[test]
+    fn structured_bazel_with_dynamic_args() {
+        let channel = "C12345".to_string();
+        let title = format!("My Title ({})", "test");
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run {
+                            target_patterns: "//tools/ci:report",
+                            args: ["--title", title, "--channel", channel, "--verbose"]
+                        }
+                    ],
+                    label: "Dynamic Args"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("-- --title My Title (test) --channel C12345 --verbose"));
+    }
+
+    #[test]
     fn structured_bazel_with_env() {
         let p = pipeline! {
             steps: [

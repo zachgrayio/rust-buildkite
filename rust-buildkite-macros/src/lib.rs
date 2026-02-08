@@ -2191,7 +2191,7 @@ impl StepDef {
         let mut target_patterns_span: Option<proc_macro2::Span> = None;
         let mut flags_value: Option<DynamicValue> = None;
         let mut extra_flags: Vec<String> = Vec::new();
-        let mut args: Vec<String> = Vec::new();
+        let mut args: Vec<DynamicValue> = Vec::new();
         let mut validate_targets = true;
         let mut dry_run = false;
         let mut step_custom_verbs: Vec<String> = Vec::new();
@@ -2302,15 +2302,15 @@ impl StepDef {
                         let args_content;
                         bracketed!(args_content in content);
                         while !args_content.is_empty() {
-                            let arg: LitStr = args_content.parse()?;
-                            args.push(arg.value());
+                            let arg = DynamicValue::parse(&args_content)?;
+                            args.push(arg);
                             if args_content.peek(Token![,]) {
                                 args_content.parse::<Token![,]>()?;
                             }
                         }
                     } else {
-                        let arg: LitStr = content.parse()?;
-                        args.push(arg.value());
+                        let arg = DynamicValue::parse(&content)?;
+                        args.push(arg);
                     }
                 }
                 "custom_verbs" => {
@@ -2459,7 +2459,8 @@ impl StepDef {
             verb.ok_or_else(|| Error::new(step_span, "bazel_command requires 'verb' field"))?;
 
         let has_dynamic = target_patterns.as_ref().is_some_and(|t| t.is_dynamic())
-            || flags_value.as_ref().is_some_and(|f| f.is_dynamic());
+            || flags_value.as_ref().is_some_and(|f| f.is_dynamic())
+            || args.iter().any(|a| a.is_dynamic());
 
         if has_dynamic {
             step.commands.push(CommandValue::from_dynamic_bazel(
@@ -2467,6 +2468,7 @@ impl StepDef {
                 flags_value,
                 extra_flags.clone(),
                 target_patterns,
+                args,
             ));
         } else {
             let target_str = target_patterns
@@ -2527,7 +2529,10 @@ impl StepDef {
 
             if !args.is_empty() {
                 cmd_parts.push("--".to_string());
-                cmd_parts.extend(args.clone());
+                cmd_parts.extend(
+                    args.iter()
+                        .filter_map(|a| a.as_literal().map(|s| s.to_string())),
+                );
             }
 
             let bazel_cmd = cmd_parts.join(" ");
@@ -2575,7 +2580,7 @@ impl StepDef {
         let mut target_patterns_span: Option<proc_macro2::Span> = None;
         let mut flags_value: Option<DynamicValue> = None;
         let mut extra_flags: Vec<String> = Vec::new();
-        let mut cmd_args: Vec<String> = Vec::new();
+        let mut cmd_args: Vec<DynamicValue> = Vec::new();
         let mut cmd_validate_targets = validate_targets_default;
         let mut cmd_dry_run = dry_run_default;
 
@@ -2685,15 +2690,15 @@ impl StepDef {
                         let args_content;
                         bracketed!(args_content in cmd_content);
                         while !args_content.is_empty() {
-                            let arg: LitStr = args_content.parse()?;
-                            cmd_args.push(arg.value());
+                            let arg = DynamicValue::parse(&args_content)?;
+                            cmd_args.push(arg);
                             if args_content.peek(Token![,]) {
                                 args_content.parse::<Token![,]>()?;
                             }
                         }
                     } else {
-                        let arg: LitStr = cmd_content.parse()?;
-                        cmd_args.push(arg.value());
+                        let arg = DynamicValue::parse(&cmd_content)?;
+                        cmd_args.push(arg);
                     }
                 }
                 other => {
@@ -2715,7 +2720,8 @@ impl StepDef {
             .ok_or_else(|| Error::new(cmd_ident.span(), "bazel_command requires 'verb' field"))?;
 
         let has_dynamic = target_patterns.as_ref().is_some_and(|t| t.is_dynamic())
-            || flags_value.as_ref().is_some_and(|f| f.is_dynamic());
+            || flags_value.as_ref().is_some_and(|f| f.is_dynamic())
+            || cmd_args.iter().any(|a| a.is_dynamic());
 
         if has_dynamic {
             Ok(CommandValue::from_dynamic_bazel(
@@ -2723,6 +2729,7 @@ impl StepDef {
                 flags_value,
                 extra_flags.clone(),
                 target_patterns,
+                cmd_args,
             ))
         } else {
             let target_str = target_patterns
@@ -2769,7 +2776,11 @@ impl StepDef {
 
             if !cmd_args.is_empty() {
                 cmd_parts.push("--".to_string());
-                cmd_parts.extend(cmd_args.clone());
+                cmd_parts.extend(
+                    cmd_args
+                        .iter()
+                        .filter_map(|a| a.as_literal().map(|s| s.to_string())),
+                );
             }
 
             let bazel_cmd = cmd_parts.join(" ");
@@ -3777,6 +3788,7 @@ enum CommandSource {
         flags: Option<DynamicValue>,
         extra_flags: Vec<String>,
         target: Option<DynamicValue>,
+        args: Vec<DynamicValue>,
     },
 }
 
@@ -3973,12 +3985,14 @@ impl CommandValue {
         flags: Option<DynamicValue>,
         extra_flags: Vec<String>,
         target: Option<DynamicValue>,
+        args: Vec<DynamicValue>,
     ) -> Self {
         Self(CommandSource::DynamicBazel {
             base_cmd,
             flags,
             extra_flags,
             target,
+            args,
         })
     }
 
@@ -3995,6 +4009,7 @@ impl CommandValue {
                 flags,
                 extra_flags,
                 target,
+                args,
             } => {
                 let flags_str = match flags {
                     Some(DynamicValue::Literal(s)) => s.clone(),
@@ -4007,10 +4022,28 @@ impl CommandValue {
                     Some(_) => "<dynamic-targets>".to_string(),
                     None => String::new(),
                 };
-                format!("bazel {} {} {}", base_cmd.trim(), flags_str, target_str)
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                let args_str = if args.is_empty() {
+                    String::new()
+                } else {
+                    let arg_strs: Vec<String> = args
+                        .iter()
+                        .map(|a| match a {
+                            DynamicValue::Literal(s) => s.clone(),
+                            _ => "<dynamic-arg>".to_string(),
+                        })
+                        .collect();
+                    format!("-- {}", arg_strs.join(" "))
+                };
+                format!(
+                    "bazel {} {} {} {}",
+                    base_cmd.trim(),
+                    flags_str,
+                    target_str,
+                    args_str
+                )
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
             }
         }
     }
@@ -4118,6 +4151,7 @@ impl CommandValue {
                 flags,
                 extra_flags,
                 target,
+                args,
             } => {
                 let verb = base_cmd.trim();
                 let flags_var = format!("__flags_{}", cmd_idx);
@@ -4146,11 +4180,31 @@ impl CommandValue {
                     None => (quote! {}, quote! { "" }),
                 };
 
+                let args_tokens = if args.is_empty() {
+                    quote! { String::new() }
+                } else {
+                    let arg_exprs: Vec<TokenStream2> = args.iter().map(|a| a.to_tokens()).collect();
+                    quote! {
+                        {
+                            let __args: Vec<String> = vec![
+                                "--".to_string(),
+                                #(ToString::to_string(&#arg_exprs)),*
+                            ];
+                            __args.join(" ")
+                        }
+                    }
+                };
+
+                let args_var = syn::Ident::new(
+                    &format!("__args_{}", cmd_idx),
+                    proc_macro2::Span::call_site(),
+                );
                 quote! {
                     {
                         #flags_validation
                         #target_validation
-                        format!("bazel {} {} {}", #base_cmd, #flags_tokens, #target_tokens)
+                        let #args_var = #args_tokens;
+                        format!("bazel {} {} {} {}", #base_cmd, #flags_tokens, #target_tokens, #args_var)
                             .split_whitespace().collect::<Vec<_>>().join(" ")
                     }
                 }
