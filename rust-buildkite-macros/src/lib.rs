@@ -1335,7 +1335,7 @@ impl StepDef {
         match ident_str.as_str() {
             "command" => {
                 if input.peek(syn::token::Brace) {
-                    Self::parse_command_object_literal(input)
+                    Self::parse_command_object_literal(input, custom_verbs)
                 } else if input.peek(syn::token::Paren) {
                     Self::parse_command_fluent(input)
                 } else {
@@ -1424,7 +1424,6 @@ impl StepDef {
             "bazel_coverage" => {
                 Self::parse_bazel_command_step(input, Some("coverage"), ident.span(), custom_verbs)
             }
-            "bazel_commands" => Self::parse_bazel_commands_step(input, ident.span(), custom_verbs),
             other if other.starts_with("bazel_") => {
                 let verb = other.strip_prefix("bazel_").unwrap();
                 if custom_verbs.iter().any(|v| v == verb) {
@@ -1442,7 +1441,7 @@ impl StepDef {
             other => Err(Error::new(
                 ident.span(),
                 format!(
-                    "unknown step type: '{}'. Expected: command, wait, block, input, trigger, group, bazel_command, bazel_build, bazel_test, bazel_run, bazel_commands",
+                    "unknown step type: '{}'. Expected: command, wait, block, input, trigger, group, bazel_command, bazel_build, bazel_test, bazel_run",
                     other
                 ),
             )),
@@ -1457,7 +1456,7 @@ impl StepDef {
         match ident_str.as_str() {
             "command" => {
                 if input.peek(syn::token::Brace) {
-                    Self::parse_command_object_literal(input)
+                    Self::parse_command_object_literal(input, _custom_verbs)
                 } else if input.peek(syn::token::Paren) {
                     Self::parse_command_fluent(input)
                 } else {
@@ -1798,11 +1797,20 @@ impl StepDef {
     }
 
     /// Parse command step with object-literal syntax: command { command: "...", label: "..." }
-    fn parse_command_object_literal(input: ParseStream) -> Result<Self> {
+    fn parse_command_object_literal(
+        input: ParseStream,
+        #[allow(unused_variables)] pipeline_custom_verbs: &[String],
+    ) -> Result<Self> {
         let content;
         braced!(content in input);
 
         let mut step = CommandStepDef::new_empty();
+        #[cfg(feature = "bazel")]
+        let mut step_custom_verbs: Vec<String> = Vec::new();
+        #[cfg(feature = "bazel")]
+        let mut validate_targets = true;
+        #[cfg(feature = "bazel")]
+        let mut dry_run = false;
 
         while !content.is_empty() {
             let field: Ident = content.parse()?;
@@ -1866,14 +1874,15 @@ impl StepDef {
                     while !cmds_content.is_empty() {
                         if cmds_content.peek(Ident) {
                             let ident: Ident = cmds_content.parse()?;
-                            if ident == "cmd" || ident == "bazel" {
+                            let ident_str = ident.to_string();
+                            if ident_str == "cmd" || ident_str == "bazel" {
                                 cmds_content.parse::<Token![!]>()?;
                                 let cmd_content;
                                 syn::parenthesized!(cmd_content in cmds_content);
                                 let lit: LitStr = cmd_content.parse().map_err(|_| {
                                     Error::new(cmd_content.span(), "cmd! requires a string literal")
                                 })?;
-                                if ident == "cmd" {
+                                if ident_str == "cmd" {
                                     let cmd_expr = CmdExpr::from_lit_str(&lit)?;
                                     step.commands.push(CommandValue::from_cmd(cmd_expr));
                                 } else {
@@ -1891,19 +1900,42 @@ impl StepDef {
                                         ));
                                     }
                                 }
+                            } else if ident_str.starts_with("bazel_")
+                                || ident_str == "bazel_command"
+                            {
+                                #[cfg(feature = "bazel")]
+                                {
+                                    let cmd_value = Self::parse_structured_bazel_in_commands(
+                                        &cmds_content,
+                                        &ident,
+                                        ident.span(),
+                                        validate_targets,
+                                        dry_run,
+                                        pipeline_custom_verbs,
+                                        &step_custom_verbs,
+                                    )?;
+                                    step.commands.push(cmd_value);
+                                }
+                                #[cfg(not(feature = "bazel"))]
+                                {
+                                    return Err(Error::new(
+                                        ident.span(),
+                                        "bazel_* commands require the 'bazel' feature. Add `features = [\"bazel\"]` to your dependency.",
+                                    ));
+                                }
                             } else {
                                 return Err(Error::new(
                                     ident.span(),
                                     format!(
-                                        "expected cmd!(\"...\") or bazel!(\"...\"), got '{}'",
-                                        ident
+                                        "expected cmd!(\"...\"), bazel!(\"...\"), or bazel_* {{ ... }}, got '{}'",
+                                        ident_str
                                     ),
                                 ));
                             }
                         } else {
                             return Err(Error::new(
                                 cmds_content.span(),
-                                "expected cmd!(\"...\") in commands array",
+                                "expected cmd!(\"...\"), bazel!(\"...\"), or bazel_* {{ ... }} in commands array",
                             ));
                         }
                         if cmds_content.peek(Token![,]) {
@@ -2075,6 +2107,28 @@ impl StepDef {
                 "allow_dependency_failure" => {
                     let val: syn::LitBool = content.parse()?;
                     step.allow_dependency_failure = val.value();
+                }
+                #[cfg(feature = "bazel")]
+                "custom_verbs" => {
+                    let verbs_content;
+                    bracketed!(verbs_content in content);
+                    while !verbs_content.is_empty() {
+                        let v: LitStr = verbs_content.parse()?;
+                        step_custom_verbs.push(v.value());
+                        if verbs_content.peek(Token![,]) {
+                            verbs_content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                #[cfg(feature = "bazel")]
+                "validate_targets" => {
+                    let val: syn::LitBool = content.parse()?;
+                    validate_targets = val.value();
+                }
+                #[cfg(feature = "bazel")]
+                "dry_run" => {
+                    let val: syn::LitBool = content.parse()?;
+                    dry_run = val.value();
                 }
                 other => {
                     return Err(Error::new(
@@ -2489,445 +2543,248 @@ impl StepDef {
         Ok(StepDef::Command(step))
     }
 
-    /// Parse bazel_commands step with multiple nested bazel commands:
-    /// bazel_commands {
-    ///     commands: [
-    ///         bazel_build { target_patterns: "//app:main" },
-    ///         bazel_test { target_patterns: "//app:test" }
-    ///     ],
-    ///     label: "Build and Test",
-    ///     key: "build_test"
-    /// }
+    /// Parse a structured bazel command (`bazel_build { ... }`, etc.) from a commands array.
     #[cfg(feature = "bazel")]
-    fn parse_bazel_commands_step(
-        input: ParseStream,
+    fn parse_structured_bazel_in_commands(
+        cmds_content: ParseStream,
+        cmd_ident: &Ident,
         step_span: proc_macro2::Span,
+        validate_targets_default: bool,
+        dry_run_default: bool,
         pipeline_custom_verbs: &[String],
-    ) -> Result<Self> {
-        let content;
-        braced!(content in input);
+        step_custom_verbs: &[String],
+    ) -> Result<CommandValue> {
+        let cmd_name = cmd_ident.to_string();
 
-        let mut step = CommandStepDef::new_empty();
-        let mut step_custom_verbs: Vec<String> = Vec::new();
-        let mut validate_targets = true;
-        let mut dry_run = false;
+        let verb = if cmd_name == "bazel_command" {
+            None
+        } else if let Some(v) = cmd_name.strip_prefix("bazel_") {
+            Some(v.to_string())
+        } else {
+            return Err(Error::new(
+                cmd_ident.span(),
+                format!("Expected bazel_build, bazel_test, etc. Got '{}'", cmd_name),
+            ));
+        };
 
-        while !content.is_empty() {
-            let field: Ident = content.parse()?;
-            content.parse::<Token![:]>()?;
+        let cmd_content;
+        braced!(cmd_content in cmds_content);
 
-            match strip_raw_ident(&field.to_string()) {
-                "commands" => {
-                    let cmds_content;
-                    bracketed!(cmds_content in content);
-                    while !cmds_content.is_empty() {
-                        let cmd_ident: Ident = cmds_content.parse()?;
-                        let cmd_name = cmd_ident.to_string();
+        let mut cmd_verb = verb;
+        let mut target_patterns: Option<DynamicValue> = None;
+        let mut target_patterns_span: Option<proc_macro2::Span> = None;
+        let mut flags_value: Option<DynamicValue> = None;
+        let mut extra_flags: Vec<String> = Vec::new();
+        let mut cmd_args: Vec<String> = Vec::new();
+        let mut cmd_validate_targets = validate_targets_default;
+        let mut cmd_dry_run = dry_run_default;
 
-                        let verb = if cmd_name == "bazel_command" {
-                            None
-                        } else if let Some(v) = cmd_name.strip_prefix("bazel_") {
-                            Some(v.to_string())
-                        } else {
-                            return Err(Error::new(
-                                cmd_ident.span(),
-                                format!(
-                                    "Expected bazel_build, bazel_test, etc. Got '{}'",
-                                    cmd_name
-                                ),
-                            ));
-                        };
+        while !cmd_content.is_empty() {
+            let cmd_field: Ident = cmd_content.parse()?;
+            cmd_content.parse::<Token![:]>()?;
 
-                        let cmd_content;
-                        braced!(cmd_content in cmds_content);
-
-                        let mut cmd_verb = verb;
-                        let mut target_patterns: Option<DynamicValue> = None;
-                        let mut target_patterns_span: Option<proc_macro2::Span> = None;
-                        let mut flags_value: Option<DynamicValue> = None;
-                        let mut extra_flags: Vec<String> = Vec::new();
-                        let mut cmd_args: Vec<String> = Vec::new();
-                        let mut cmd_validate_targets = validate_targets;
-                        let mut cmd_dry_run = dry_run;
-
-                        while !cmd_content.is_empty() {
-                            let cmd_field: Ident = cmd_content.parse()?;
-                            cmd_content.parse::<Token![:]>()?;
-
-                            match strip_raw_ident(&cmd_field.to_string()) {
-                                "verb" => {
-                                    if cmd_verb.is_some() {
-                                        return Err(Error::new(
-                                            cmd_field.span(),
-                                            "verb cannot be specified when using bazel_build, bazel_test, etc.",
-                                        ));
-                                    }
-                                    let v: LitStr = cmd_content.parse()?;
-                                    cmd_verb = Some(v.value());
-                                }
-                                "target_patterns" => {
-                                    target_patterns_span = Some(cmd_field.span());
-                                    target_patterns = Some(DynamicValue::parse(&cmd_content)?);
-                                }
-                                "flags" => {
-                                    if cmd_content.peek(syn::token::Bracket) {
-                                        let flags_content;
-                                        bracketed!(flags_content in cmd_content);
-                                        let mut flag_parts: Vec<String> = Vec::new();
-                                        while !flags_content.is_empty() {
-                                            let flag: LitStr = flags_content.parse()?;
-                                            flag_parts.push(flag.value());
-                                            if flags_content.peek(Token![,]) {
-                                                flags_content.parse::<Token![,]>()?;
-                                            }
-                                        }
-                                        let joined = flag_parts.join(" ");
-                                        flags_value = Some(DynamicValue::Literal(joined));
-                                    } else {
-                                        flags_value = Some(DynamicValue::parse(&cmd_content)?);
-                                    }
-                                }
-                                "config" => {
-                                    if cmd_content.peek(syn::token::Bracket) {
-                                        let configs_content;
-                                        bracketed!(configs_content in cmd_content);
-                                        while !configs_content.is_empty() {
-                                            let c: LitStr = configs_content.parse()?;
-                                            extra_flags.push(format!("--config={}", c.value()));
-                                            if configs_content.peek(Token![,]) {
-                                                configs_content.parse::<Token![,]>()?;
-                                            }
-                                        }
-                                    } else {
-                                        let c: LitStr = cmd_content.parse()?;
-                                        extra_flags.push(format!("--config={}", c.value()));
-                                    }
-                                }
-                                "compilation_mode" => {
-                                    let mode: LitStr = cmd_content.parse()?;
-                                    extra_flags
-                                        .push(format!("--compilation_mode={}", mode.value()));
-                                }
-                                "build_tag_filters" => {
-                                    if cmd_content.peek(syn::token::Bracket) {
-                                        let filters_content;
-                                        bracketed!(filters_content in cmd_content);
-                                        let mut filters: Vec<String> = Vec::new();
-                                        while !filters_content.is_empty() {
-                                            let f: LitStr = filters_content.parse()?;
-                                            filters.push(f.value());
-                                            if filters_content.peek(Token![,]) {
-                                                filters_content.parse::<Token![,]>()?;
-                                            }
-                                        }
-                                        extra_flags.push(format!(
-                                            "--build_tag_filters={}",
-                                            filters.join(",")
-                                        ));
-                                    } else {
-                                        let f: LitStr = cmd_content.parse()?;
-                                        extra_flags
-                                            .push(format!("--build_tag_filters={}", f.value()));
-                                    }
-                                }
-                                "test_tag_filters" => {
-                                    if cmd_content.peek(syn::token::Bracket) {
-                                        let filters_content;
-                                        bracketed!(filters_content in cmd_content);
-                                        let mut filters: Vec<String> = Vec::new();
-                                        while !filters_content.is_empty() {
-                                            let f: LitStr = filters_content.parse()?;
-                                            filters.push(f.value());
-                                            if filters_content.peek(Token![,]) {
-                                                filters_content.parse::<Token![,]>()?;
-                                            }
-                                        }
-                                        extra_flags.push(format!(
-                                            "--test_tag_filters={}",
-                                            filters.join(",")
-                                        ));
-                                    } else {
-                                        let f: LitStr = cmd_content.parse()?;
-                                        extra_flags
-                                            .push(format!("--test_tag_filters={}", f.value()));
-                                    }
-                                }
-                                "validate_targets" => {
-                                    let val: syn::LitBool = cmd_content.parse()?;
-                                    cmd_validate_targets = val.value();
-                                }
-                                "dry_run" => {
-                                    let val: syn::LitBool = cmd_content.parse()?;
-                                    cmd_dry_run = val.value();
-                                }
-                                "args" => {
-                                    if cmd_content.peek(syn::token::Bracket) {
-                                        let args_content;
-                                        bracketed!(args_content in cmd_content);
-                                        while !args_content.is_empty() {
-                                            let arg: LitStr = args_content.parse()?;
-                                            cmd_args.push(arg.value());
-                                            if args_content.peek(Token![,]) {
-                                                args_content.parse::<Token![,]>()?;
-                                            }
-                                        }
-                                    } else {
-                                        let arg: LitStr = cmd_content.parse()?;
-                                        cmd_args.push(arg.value());
-                                    }
-                                }
-                                other => {
-                                    return Err(Error::new(
-                                        cmd_field.span(),
-                                        format!(
-                                            "unknown bazel command field: {}. Use step-level fields (label, key, etc.) outside the commands array.",
-                                            other
-                                        ),
-                                    ));
-                                }
-                            }
-                            if cmd_content.peek(Token![,]) {
-                                cmd_content.parse::<Token![,]>()?;
+            match strip_raw_ident(&cmd_field.to_string()) {
+                "verb" => {
+                    if cmd_verb.is_some() {
+                        return Err(Error::new(
+                            cmd_field.span(),
+                            "verb cannot be specified when using bazel_build, bazel_test, etc.",
+                        ));
+                    }
+                    let v: LitStr = cmd_content.parse()?;
+                    cmd_verb = Some(v.value());
+                }
+                "target_patterns" => {
+                    target_patterns_span = Some(cmd_field.span());
+                    target_patterns = Some(DynamicValue::parse(&cmd_content)?);
+                }
+                "flags" => {
+                    if cmd_content.peek(syn::token::Bracket) {
+                        let flags_content;
+                        bracketed!(flags_content in cmd_content);
+                        let mut flag_parts: Vec<String> = Vec::new();
+                        while !flags_content.is_empty() {
+                            let flag: LitStr = flags_content.parse()?;
+                            flag_parts.push(flag.value());
+                            if flags_content.peek(Token![,]) {
+                                flags_content.parse::<Token![,]>()?;
                             }
                         }
-
-                        let verb = cmd_verb.ok_or_else(|| {
-                            Error::new(cmd_ident.span(), "bazel_command requires 'verb' field")
-                        })?;
-
-                        let has_dynamic = target_patterns.as_ref().is_some_and(|t| t.is_dynamic())
-                            || flags_value.as_ref().is_some_and(|f| f.is_dynamic());
-
-                        if has_dynamic {
-                            step.commands.push(CommandValue::from_dynamic_bazel(
-                                verb.clone(),
-                                flags_value,
-                                extra_flags.clone(),
-                                target_patterns,
-                            ));
-                        } else {
-                            let target_str = target_patterns
-                                .as_ref()
-                                .and_then(|t| t.as_literal())
-                                .map(|s| s.to_string());
-
-                            if let Some(ref t) = target_str
-                                && cmd_validate_targets
-                                && !t.is_empty()
-                                && let Err(e) = Self::validate_target_patterns(t)
-                            {
-                                return Err(Error::new(
-                                    target_patterns_span.unwrap_or(step_span),
-                                    e,
-                                ));
-                            }
-
-                            let has_subtraction = target_str.as_ref().is_some_and(|t| {
-                                t.split_whitespace().any(|p| {
-                                    p.starts_with("-//")
-                                        || p.starts_with("-@")
-                                        || p.starts_with("-:")
-                                })
-                            });
-
-                            let flags_have_separator = flags_value
-                                .as_ref()
-                                .and_then(|fv| fv.as_literal())
-                                .is_some_and(|s| s.split_whitespace().any(|f| f == "--"))
-                                || extra_flags.iter().any(|f| f == "--");
-
-                            let mut cmd_parts = vec![verb.clone()];
-
-                            if let Some(ref fv) = flags_value
-                                && let Some(flags_str) = fv.as_literal()
-                            {
-                                for flag in flags_str.split_whitespace() {
-                                    cmd_parts.push(flag.to_string());
-                                }
-                            }
-                            cmd_parts.extend(extra_flags.clone());
-
-                            if let Some(ref t) = target_str {
-                                if has_subtraction && !flags_have_separator {
-                                    cmd_parts.push("--".to_string());
-                                }
-                                cmd_parts.push(t.clone());
-                            }
-
-                            if !cmd_args.is_empty() {
-                                cmd_parts.push("--".to_string());
-                                cmd_parts.extend(cmd_args.clone());
-                            }
-
-                            let bazel_cmd = cmd_parts.join(" ");
-
-                            let lit = LitStr::new(&bazel_cmd, step_span);
-                            let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
-                            all_custom_verbs.extend(step_custom_verbs.clone());
-                            let bazel_expr = BazelExpr::from_lit_str(
-                                &lit,
-                                cmd_validate_targets,
-                                cmd_dry_run,
-                                &all_custom_verbs,
-                            )?;
-                            step.commands.push(CommandValue::from_bazel(bazel_expr));
-                        }
-
-                        if cmds_content.peek(Token![,]) {
-                            cmds_content.parse::<Token![,]>()?;
-                        }
+                        let joined = flag_parts.join(" ");
+                        flags_value = Some(DynamicValue::Literal(joined));
+                    } else {
+                        flags_value = Some(DynamicValue::parse(&cmd_content)?);
                     }
                 }
-                "custom_verbs" => {
-                    let verbs_content;
-                    bracketed!(verbs_content in content);
-                    while !verbs_content.is_empty() {
-                        let v: LitStr = verbs_content.parse()?;
-                        step_custom_verbs.push(v.value());
-                        if verbs_content.peek(Token![,]) {
-                            verbs_content.parse::<Token![,]>()?;
+                "config" => {
+                    if cmd_content.peek(syn::token::Bracket) {
+                        let configs_content;
+                        bracketed!(configs_content in cmd_content);
+                        while !configs_content.is_empty() {
+                            let c: LitStr = configs_content.parse()?;
+                            extra_flags.push(format!("--config={}", c.value()));
+                            if configs_content.peek(Token![,]) {
+                                configs_content.parse::<Token![,]>()?;
+                            }
                         }
+                    } else {
+                        let c: LitStr = cmd_content.parse()?;
+                        extra_flags.push(format!("--config={}", c.value()));
+                    }
+                }
+                "compilation_mode" => {
+                    let mode: LitStr = cmd_content.parse()?;
+                    extra_flags.push(format!("--compilation_mode={}", mode.value()));
+                }
+                "build_tag_filters" => {
+                    if cmd_content.peek(syn::token::Bracket) {
+                        let filters_content;
+                        bracketed!(filters_content in cmd_content);
+                        let mut filters: Vec<String> = Vec::new();
+                        while !filters_content.is_empty() {
+                            let f: LitStr = filters_content.parse()?;
+                            filters.push(f.value());
+                            if filters_content.peek(Token![,]) {
+                                filters_content.parse::<Token![,]>()?;
+                            }
+                        }
+                        extra_flags.push(format!("--build_tag_filters={}", filters.join(",")));
+                    } else {
+                        let f: LitStr = cmd_content.parse()?;
+                        extra_flags.push(format!("--build_tag_filters={}", f.value()));
+                    }
+                }
+                "test_tag_filters" => {
+                    if cmd_content.peek(syn::token::Bracket) {
+                        let filters_content;
+                        bracketed!(filters_content in cmd_content);
+                        let mut filters: Vec<String> = Vec::new();
+                        while !filters_content.is_empty() {
+                            let f: LitStr = filters_content.parse()?;
+                            filters.push(f.value());
+                            if filters_content.peek(Token![,]) {
+                                filters_content.parse::<Token![,]>()?;
+                            }
+                        }
+                        extra_flags.push(format!("--test_tag_filters={}", filters.join(",")));
+                    } else {
+                        let f: LitStr = cmd_content.parse()?;
+                        extra_flags.push(format!("--test_tag_filters={}", f.value()));
                     }
                 }
                 "validate_targets" => {
-                    let val: syn::LitBool = content.parse()?;
-                    validate_targets = val.value();
+                    let val: syn::LitBool = cmd_content.parse()?;
+                    cmd_validate_targets = val.value();
                 }
                 "dry_run" => {
-                    let val: syn::LitBool = content.parse()?;
-                    dry_run = val.value();
+                    let val: syn::LitBool = cmd_content.parse()?;
+                    cmd_dry_run = val.value();
                 }
-                "label" => {
-                    step.label = Some(content.parse()?);
-                }
-                "key" => {
-                    step.key = Some(KeyValue::parse(&content)?);
-                }
-                "env" => {
-                    let env_content;
-                    braced!(env_content in content);
-                    while !env_content.is_empty() {
-                        let var_name: Ident = env_content.parse()?;
-                        env_content.parse::<Token![:]>()?;
-                        let var_value = DynamicValue::parse(&env_content)?;
-                        step.env.push((var_name.to_string(), var_value));
-                        if env_content.peek(Token![,]) {
-                            env_content.parse::<Token![,]>()?;
+                "args" => {
+                    if cmd_content.peek(syn::token::Bracket) {
+                        let args_content;
+                        bracketed!(args_content in cmd_content);
+                        while !args_content.is_empty() {
+                            let arg: LitStr = args_content.parse()?;
+                            cmd_args.push(arg.value());
+                            if args_content.peek(Token![,]) {
+                                args_content.parse::<Token![,]>()?;
+                            }
                         }
-                    }
-                }
-                "depends_on" => {
-                    let deps_content;
-                    bracketed!(deps_content in content);
-                    while !deps_content.is_empty() {
-                        let dep: LitStr = deps_content.parse()?;
-                        step.depends_on.push((dep.value(), dep.span()));
-                        if deps_content.peek(Token![,]) {
-                            deps_content.parse::<Token![,]>()?;
-                        }
-                    }
-                }
-                "timeout_in_minutes" => {
-                    let timeout: syn::LitInt = content.parse()?;
-                    step.timeout_in_minutes = Some(timeout);
-                }
-                "soft_fail" => {
-                    let val: syn::LitBool = content.parse()?;
-                    step.soft_fail = val.value();
-                }
-                "parallelism" => {
-                    let p: syn::LitInt = content.parse()?;
-                    step.parallelism = Some(p);
-                }
-                "artifact_paths" => {
-                    let paths_content;
-                    bracketed!(paths_content in content);
-                    while !paths_content.is_empty() {
-                        let path: LitStr = paths_content.parse()?;
-                        step.artifact_paths.push(path);
-                        if paths_content.peek(Token![,]) {
-                            paths_content.parse::<Token![,]>()?;
-                        }
-                    }
-                }
-                "agents" => {
-                    let agents_content;
-                    braced!(agents_content in content);
-                    while !agents_content.is_empty() {
-                        let agent_key: Ident = agents_content.parse()?;
-                        agents_content.parse::<Token![:]>()?;
-                        let agent_value: LitStr = agents_content.parse()?;
-                        step.agents.push((agent_key.to_string(), agent_value));
-                        if agents_content.peek(Token![,]) {
-                            agents_content.parse::<Token![,]>()?;
-                        }
-                    }
-                }
-                "branches" => {
-                    let branches_content;
-                    bracketed!(branches_content in content);
-                    while !branches_content.is_empty() {
-                        let branch: LitStr = branches_content.parse()?;
-                        step.branches.push(branch);
-                        if branches_content.peek(Token![,]) {
-                            branches_content.parse::<Token![,]>()?;
-                        }
-                    }
-                }
-                "condition" | "if" => {
-                    let condition: LitStr = content.parse()?;
-                    if let Err(errors) =
-                        buildkite_conditional::validate_condition(&condition.value())
-                    {
-                        return Err(Error::new(
-                            condition.span(),
-                            format!("Invalid Buildkite conditional: {}", errors.join("; ")),
-                        ));
-                    }
-                    step.if_condition = Some(condition);
-                }
-                "cache" => {
-                    let cache_content;
-                    bracketed!(cache_content in content);
-                    while !cache_content.is_empty() {
-                        let path: LitStr = cache_content.parse()?;
-                        step.cache.push(path);
-                        if cache_content.peek(Token![,]) {
-                            cache_content.parse::<Token![,]>()?;
-                        }
-                    }
-                }
-                "plugins" => {
-                    let plugins_content;
-                    bracketed!(plugins_content in content);
-                    while !plugins_content.is_empty() {
-                        let plugin = NestedValue::parse(&plugins_content)?;
-                        step.plugins.push(plugin);
-                        if plugins_content.peek(Token![,]) {
-                            plugins_content.parse::<Token![,]>()?;
-                        }
+                    } else {
+                        let arg: LitStr = cmd_content.parse()?;
+                        cmd_args.push(arg.value());
                     }
                 }
                 other => {
                     return Err(Error::new(
-                        field.span(),
-                        format!("unknown bazel_commands step field: {}", other),
+                        cmd_field.span(),
+                        format!(
+                            "unknown bazel command field: {}. Use step-level fields (label, key, etc.) outside the commands array.",
+                            other
+                        ),
                     ));
                 }
             }
-            if content.peek(Token![,]) {
-                content.parse::<Token![,]>()?;
+            if cmd_content.peek(Token![,]) {
+                cmd_content.parse::<Token![,]>()?;
             }
         }
 
-        if step.commands.is_empty() {
-            return Err(Error::new(
-                step_span,
-                "bazel_commands requires 'commands' field with at least one bazel command",
-            ));
-        }
+        let verb = cmd_verb
+            .ok_or_else(|| Error::new(cmd_ident.span(), "bazel_command requires 'verb' field"))?;
 
-        Ok(StepDef::Command(step))
+        let has_dynamic = target_patterns.as_ref().is_some_and(|t| t.is_dynamic())
+            || flags_value.as_ref().is_some_and(|f| f.is_dynamic());
+
+        if has_dynamic {
+            Ok(CommandValue::from_dynamic_bazel(
+                verb.clone(),
+                flags_value,
+                extra_flags.clone(),
+                target_patterns,
+            ))
+        } else {
+            let target_str = target_patterns
+                .as_ref()
+                .and_then(|t| t.as_literal())
+                .map(|s| s.to_string());
+
+            if let Some(ref t) = target_str
+                && cmd_validate_targets
+                && !t.is_empty()
+                && let Err(e) = Self::validate_target_patterns(t)
+            {
+                return Err(Error::new(target_patterns_span.unwrap_or(step_span), e));
+            }
+
+            let has_subtraction = target_str.as_ref().is_some_and(|t| {
+                t.split_whitespace()
+                    .any(|p| p.starts_with("-//") || p.starts_with("-@") || p.starts_with("-:"))
+            });
+
+            let flags_have_separator = flags_value
+                .as_ref()
+                .and_then(|fv| fv.as_literal())
+                .is_some_and(|s| s.split_whitespace().any(|f| f == "--"))
+                || extra_flags.iter().any(|f| f == "--");
+
+            let mut cmd_parts = vec![verb.clone()];
+
+            if let Some(ref fv) = flags_value
+                && let Some(flags_str) = fv.as_literal()
+            {
+                for flag in flags_str.split_whitespace() {
+                    cmd_parts.push(flag.to_string());
+                }
+            }
+            cmd_parts.extend(extra_flags.clone());
+
+            if let Some(ref t) = target_str {
+                if has_subtraction && !flags_have_separator {
+                    cmd_parts.push("--".to_string());
+                }
+                cmd_parts.push(t.clone());
+            }
+
+            if !cmd_args.is_empty() {
+                cmd_parts.push("--".to_string());
+                cmd_parts.extend(cmd_args.clone());
+            }
+
+            let bazel_cmd = cmd_parts.join(" ");
+
+            let lit = LitStr::new(&bazel_cmd, step_span);
+            let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
+            all_custom_verbs.extend(step_custom_verbs.iter().cloned());
+            let bazel_expr = BazelExpr::from_lit_str(
+                &lit,
+                cmd_validate_targets,
+                cmd_dry_run,
+                &all_custom_verbs,
+            )?;
+            Ok(CommandValue::from_bazel(bazel_expr))
+        }
     }
 
     /// Parse wait step with object-literal syntax: wait { continue_on_failure: true }

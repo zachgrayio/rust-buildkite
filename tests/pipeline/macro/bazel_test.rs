@@ -1568,14 +1568,14 @@ mod multiple_bazel_commands {
     }
 }
 
-mod bazel_commands_step {
+mod structured_bazel_in_commands {
     use super::*;
 
     #[test]
-    fn basic_bazel_commands() {
+    fn basic_structured_bazel() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build { target_patterns: "//app:main" },
                         bazel_test { target_patterns: "//app:test" }
@@ -1594,10 +1594,10 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_with_flags() {
+    fn structured_bazel_with_flags() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build {
                             target_patterns: "//...",
@@ -1619,10 +1619,10 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_with_args() {
+    fn structured_bazel_with_args() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_run {
                             target_patterns: "//tools/ci:publish",
@@ -1644,10 +1644,10 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_with_env() {
+    fn structured_bazel_with_env() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build { target_patterns: "//..." }
                     ],
@@ -1663,14 +1663,14 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_with_depends_on() {
+    fn structured_bazel_with_depends_on() {
         let p = pipeline! {
             steps: [
                 command {
                     command: cmd!("echo setup"),
                     key: "setup"
                 },
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build { target_patterns: "//..." }
                     ],
@@ -1686,10 +1686,10 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_multiple_verbs() {
+    fn structured_bazel_multiple_verbs() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build { target_patterns: "//..." },
                         bazel_test { target_patterns: "//..." },
@@ -1706,10 +1706,10 @@ mod bazel_commands_step {
     }
 
     #[test]
-    fn bazel_commands_with_generic_verb() {
+    fn structured_bazel_with_generic_verb() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_command { verb: "info" },
                         bazel_build { target_patterns: "//..." }
@@ -1721,6 +1721,29 @@ mod bazel_commands_step {
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains("- bazel info"));
         assert!(yaml.contains("- bazel build //..."));
+    }
+
+    #[test]
+    fn mixed_cmd_and_structured_bazel() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        cmd!("echo 'Starting build'"),
+                        bazel_build { target_patterns: "//...", config: "ci" },
+                        bazel_test { target_patterns: "//..." },
+                        cmd!("echo 'Build complete'")
+                    ],
+                    label: "Mixed Pipeline"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("commands:"));
+        assert!(yaml.contains("- echo 'Starting build'"));
+        assert!(yaml.contains("- bazel build --config=ci //..."));
+        assert!(yaml.contains("- bazel test //..."));
+        assert!(yaml.contains("- echo 'Build complete'"));
     }
 }
 
@@ -1905,10 +1928,10 @@ mod bazel_flag_shorthands {
     }
 
     #[test]
-    fn bazel_commands_with_shorthands() {
+    fn structured_bazel_with_shorthands() {
         let p = pipeline! {
             steps: [
-                bazel_commands {
+                command {
                     commands: [
                         bazel_build {
                             target_patterns: "//...",

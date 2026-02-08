@@ -50,9 +50,9 @@ fn main() {
                 key: runtime!(format!("{}_build", app_name))
             },
 
-            // Multiple commands
-            bazel_commands {
+            command {
                 commands: [
+                    cmd!("echo 'Starting pipeline'"),
                     bazel_build {
                         target_patterns: "//app:main",
                         config: ["ci", "remote"],
