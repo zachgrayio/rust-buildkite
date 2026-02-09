@@ -17,35 +17,30 @@
 #![allow(unused_imports)]
 use rust_buildkite::{comptime, comptime_shell, pipeline, runtime};
 
-const STATIC_TARGETS: &str = "//app:main //lib:core";
+const STATIC_TARGETS: &str = "//cpp:hello-world //cpp:hello-lib";
 
 fn get_targets_from_env() -> String {
     std::env::var("BAZEL_TARGETS").unwrap_or_else(|_| "//...".to_string())
 }
 
 fn main() {
-    let app_name = "myapp";
+    let app_name = "cpp";
     let dynamic_flags = format!("--jobs={}", num_cpus());
 
     let pipeline = pipeline! {
         env: { CI: "true" },
         agents: { queue: "bazel-runners" },
         notify: [{ slack: "#builds" }],
-        image: "gcr.io/bazel-public/bazel:latest",
-        secrets: ["CACHE_KEY"],
-        priority: 5,
 
         steps: [
-            // Dynamic label with format!
             command {
                 command: bazel!("info"),
                 label: format!("{} info", app_name),
                 key: "info"
             },
 
-            // Dynamic key with runtime!
             bazel_build {
-                target_patterns: "//app:main",
+                target_patterns: "//cpp:hello-world",
                 label: format!("{} build", app_name),
                 key: runtime!(format!("{}_build", app_name))
             },
@@ -54,35 +49,33 @@ fn main() {
                 commands: [
                     cmd!("echo 'Starting pipeline'"),
                     bazel_build {
-                        target_patterns: "//app:main",
+                        target_patterns: "//cpp:hello-world",
                         config: ["ci", "remote"],
                         compilation_mode: "opt"
                     },
                     bazel_test {
-                        target_patterns: "//...",
-                        test_tag_filters: ["-foo", "-bar"],
+                        target_patterns: "//cpp:hello-success_test",
+                        test_tag_filters: ["-slow"],
                         config: "ci"
                     },
                     bazel_run {
-                        target_patterns: "//tools/ci:publish",
-                        args: ["--bucket", "artifacts", "--region", "us-west-2"]
+                        target_patterns: "//cpp:hello-world",
+                        args: ["--greeting", "hello"]
                     }
                 ],
-                label: "Build, Test, and Publish",
+                label: "Build, Test, and Run",
                 key: "build_test"
             },
 
-            // Flag shorthands
             bazel_build {
                 target_patterns: "//...",
                 config: ["ci", "remote"],
                 compilation_mode: "opt",
-                build_tag_filters: ["-foo"],
+                build_tag_filters: ["-slow"],
                 label: "build with shorthands",
                 key: "build_shorthands"
             },
 
-            // Compile-time expressions
             bazel_build {
                 target_patterns: comptime!(STATIC_TARGETS),
                 label: "comptime const",
@@ -90,12 +83,11 @@ fn main() {
             },
 
             bazel_build {
-                target_patterns: comptime_shell!("echo '//cpp:hello'"),
+                target_patterns: comptime_shell!("echo '//cpp:hello-world'"),
                 label: "comptime shell",
                 key: "build_shell"
             },
 
-            // Runtime expressions
             bazel_build {
                 target_patterns: runtime!(get_targets_from_env()),
                 flags: runtime!(dynamic_flags),
@@ -104,14 +96,13 @@ fn main() {
             },
 
             bazel_run {
-                target_patterns: "//tools:deploy",
+                target_patterns: "//cpp:hello-world",
                 config: "ci",
-                args: ["--env", "prod", "--verbose"],
-                label: "deploy",
-                key: "deploy"
+                args: ["--greeting", "hello"],
+                label: "run",
+                key: "run"
             },
 
-            // Custom verb
             bazel_command {
                 verb: "query",
                 target_patterns: "//...",
