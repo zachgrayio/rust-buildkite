@@ -1,0 +1,14 @@
+error: Command path 'scripts/nonexistent.sh' does not exist on the build machine.
+       If this path will exist at runtime, add it to expect_paths.
+ --> tests/ui/missing_implicit_relative_path.rs:6:26
+  |
+6 |             command(cmd!("scripts/nonexistent.sh")).key("script")
+  |                          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `cmd`
+ --> tests/ui/missing_implicit_relative_path.rs:1:22
+  |
+1 | use rust_buildkite::{cmd, pipeline};
+  |                      ^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

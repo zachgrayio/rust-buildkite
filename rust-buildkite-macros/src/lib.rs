@@ -7066,8 +7066,12 @@ impl CmdExpr {
             return Ok(());
         }
 
-        if command_name.starts_with('/') || command_name.starts_with("./") {
-            let path: PathBuf = if let Some(rel) = command_name.strip_prefix("./") {
+        let is_relative = command_name.starts_with("./") || command_name.contains('/');
+        if command_name.starts_with('/') || is_relative {
+            let path: PathBuf = if command_name.starts_with('/') {
+                PathBuf::from(command_name)
+            } else {
+                let rel = command_name.strip_prefix("./").unwrap_or(command_name);
                 #[cfg(feature = "bazel")]
                 {
                     if let Ok(workspace) = crate::bazel::find_bazel_workspace_from_env() {
@@ -7081,8 +7085,6 @@ impl CmdExpr {
                     let _ = rel;
                     PathBuf::from(command_name)
                 }
-            } else {
-                PathBuf::from(command_name)
             };
 
             if !path.exists() {

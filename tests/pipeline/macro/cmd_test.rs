@@ -245,6 +245,33 @@ mod allowed_commands {
     }
 
     #[test]
+    fn bare_relative_path_command() {
+        let dir = std::path::Path::new("scripts");
+        std::fs::create_dir_all(dir).unwrap();
+        let script_path = dir.join("deploy.sh");
+        std::fs::write(&script_path, "#!/bin/bash\necho deploy").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let pipeline = pipeline! {
+            allowed_commands: ["scripts/deploy.sh"],
+            expect_paths: ["scripts/deploy.sh"],
+            steps: [
+                command(cmd!("scripts/deploy.sh production")).key("deploy")
+            ]
+        };
+
+        let yaml = serde_yaml::to_string(&pipeline).unwrap();
+        assert!(yaml.contains("scripts/deploy.sh production"));
+
+        let _ = std::fs::remove_file(&script_path);
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
     fn hyphenated_command_in_allowlist() {
         let pipeline = pipeline! {
             allowed_commands: ["docker-compose"],

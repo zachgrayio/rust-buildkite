@@ -10,6 +10,7 @@ fn ui_tests() {
     t.compile_fail("tests/ui/cmd_not_in_allowlist.rs");
     t.compile_fail("tests/ui/missing_absolute_path.rs");
     t.compile_fail("tests/ui/missing_relative_path.rs");
+    t.compile_fail("tests/ui/missing_implicit_relative_path.rs");
     t.compile_fail("tests/ui/raw_string_rejected.rs");
     t.compile_fail("tests/ui/undefined_env_var.rs");
     t.compile_fail("tests/ui/undefined_variable.rs");
