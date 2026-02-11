@@ -18,6 +18,8 @@ Add the dependency to your `Cargo.toml`:
 rust-buildkite = "0.1"
 ```
 
+## API Client
+
 Simple example for listing all pipelines:
 
 ```rust
@@ -35,9 +37,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Generating Dynamic Pipelines
+
+```rust
+
+use rust_buildkite::pipeline;
+
+fn main() {
+    let pipeline = pipeline! {
+        env: {
+            CI: "true",
+            RUST_BACKTRACE: "1",
+            CARGO_TERM_COLOR: "always"
+        },
+        expect_env: [SHELL_ENV, BUILDKITE_ENV],
+        expect_paths: ["./scripts/deploy.sh"],
+        steps: [
+            command {
+                command: cmd!("cargo fmt --check"),
+                label: "🎨 Format",
+                key: "fmt"
+            },
+            command {
+                command: cmd!("cargo clippy -- -D warnings"),
+                label: "📎 Clippy",
+                key: "clippy",
+                soft_fail: true
+            },
+            command {
+                command: cmd!("cargo test --all-features"),
+                label: "🧪 Tests",
+                key: "test",
+                env: {
+                    RUST_LOG: "debug"
+                },
+                parallelism: 4,
+                retry: {
+                    automatic: { limit: 2 }
+                }
+            },
+            wait,
+            command {
+                command: cmd!(r#"echo "Building $BUILDKITE_BRANCH @ $BUILDKITE_COMMIT""#),
+                label: "📋 Build Info"
+            },
+            command {
+                command: cmd!("cargo build --release"),
+                label: "🔨 Build",
+                key: "build",
+                artifact_paths: ["target/release/myapp"]
+            },
+            wait,
+            block {
+                block: "Deploy to Production?",
+                key: "approval",
+                prompt: "Are you sure?",
+                branches: ["main"]
+            },
+            command {
+                command: cmd!("cd dist && ./scripts/deploy.sh production"),
+                label: "🚀 Deploy",
+                key: "deploy",
+                depends_on: ["build", "approval"],
+                concurrency: 1,
+                concurrency_group: "deploy/production"
+            }
+        ]
+    };
+
+    println!("{}", serde_yaml::to_string(&pipeline).expect("yaml"));
+}
+```
+
 See the [api_examples](examples/api/) directory for additional examples on usage of the API client, and [pipeline_examples](examples/pipeline/) for example usage of the Pipeline definition code generated from the Buildkite Json Schema.
 
-## Pipeline Registration
+## Advanced
+
+### Pipeline Registration
 
 For projects with multiple pipelines, use the `#[register]` attribute macro to declare pipelines with metadata, then use `registered_pipelines()` to iterate over them at runtime:
 
