@@ -1,11 +1,6 @@
 # rust-buildkite
 
-A [Rust](https://www.rust-lang.org/) library and client for the [Buildkite API](https://buildkite.com/docs/api).
-
-## Disclaimer
-
-- The initial commit of this project is a direct port of [go-buildkite](https://github.com/buildkite/go-buildkite), with an intentionally similar API and test scenarios.
-- This is not yet fully validated, and as such, it's not ready for production usage.
+A Buildkite dynamic pipeline generation framework and [Buildkite API](https://buildkite.com/docs/api) API client.
 
 # Usage
 
@@ -133,7 +128,7 @@ pub fn premerge() {
 use rust_buildkite::registered_pipelines;
 
 fn main() {
-    mylib::link_pipelines();  // Required - see below
+    mylib::link_pipelines();
     
     let branch = std::env::var("BUILDKITE_BRANCH").unwrap_or_default();
     
@@ -238,9 +233,9 @@ For testing or special cases:
 BUILDKITE_SKIP_RUNTIME_VALIDATION=1 ./my_pipeline
 ```
 
-## Development
+# Development
 
-### Running Tests
+## Running Tests
 
 Tests are configured via `.cargo/config.toml` to automatically skip runtime validation:
 
