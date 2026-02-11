@@ -1,6 +1,6 @@
 # rust-buildkite
 
-A Buildkite dynamic pipeline generation framework and [Buildkite API](https://buildkite.com/docs/api) API client.
+A Buildkite dynamic pipeline generation framework and [Buildkite API](https://buildkite.com/docs/api) client.
 
 # Usage
 
