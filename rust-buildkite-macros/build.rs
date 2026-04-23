@@ -4,6 +4,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         use std::env;
         use std::path::PathBuf;
 
+        unsafe { env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path().unwrap()) };
+
         let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 
         tonic_build::configure()
