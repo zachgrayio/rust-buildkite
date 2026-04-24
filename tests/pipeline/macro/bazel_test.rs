@@ -629,6 +629,134 @@ mod target_patterns {
         assert!(yaml.contains("//..."));
         assert!(yaml.contains("--jobs=4"));
     }
+
+    #[test]
+    fn dynamic_target_merges_flags_with_structured_options() {
+        let targets = "//...";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: runtime!(targets),
+                    config: "ci-buildkite",
+                    compilation_mode: "fastbuild",
+                    test_tag_filters: ["-disabled-ci"],
+                    flags: ["--build_tests_only"],
+                    label: "merged",
+                    key: "merged"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//..."), "yaml: {}", yaml);
+        assert!(yaml.contains("--build_tests_only"), "yaml: {}", yaml);
+        assert!(yaml.contains("--config=ci-buildkite"), "yaml: {}", yaml);
+        assert!(
+            yaml.contains("--compilation_mode=fastbuild"),
+            "yaml: {}",
+            yaml
+        );
+        assert!(
+            yaml.contains("--test_tag_filters=-disabled-ci"),
+            "yaml: {}",
+            yaml
+        );
+    }
+
+    #[test]
+    fn dynamic_flags_merge_with_structured_options() {
+        // Same merge behavior, but with `flags:` itself dynamic via runtime!().
+        let targets = "//...";
+        let extra = "--jobs=4";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: runtime!(targets),
+                    config: "ci",
+                    compilation_mode: "opt",
+                    flags: runtime!(extra),
+                    label: "dyn-merged",
+                    key: "dyn-merged"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("--jobs=4"), "yaml: {}", yaml);
+        assert!(yaml.contains("--config=ci"), "yaml: {}", yaml);
+        assert!(yaml.contains("--compilation_mode=opt"), "yaml: {}", yaml);
+    }
+
+    #[test]
+    fn dynamic_target_keeps_both_inline_and_structured_config() {
+        let targets = "//...";
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: runtime!(targets),
+                    config: "ci-buildkite",
+                    compilation_mode: "fastbuild",
+                    test_tag_filters: [
+                        "-disabled-ci",
+                    ],
+                    flags: ["--build_tests_only", "--config=ci-buildkite"],
+                    label: "runner_bazel_build_and_test",
+                    key: "runner_bazel_build_and_test"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        let cmd_line = yaml
+            .lines()
+            .find(|l| l.contains("bazel test"))
+            .unwrap_or_else(|| panic!("no bazel test command in yaml: {}", yaml));
+        let config_count = cmd_line.matches("--config=ci-buildkite").count();
+        assert_eq!(
+            config_count, 2,
+            "expected both inline and structured --config=ci-buildkite to be emitted, got {} in {:?}",
+            config_count, cmd_line
+        );
+        assert!(cmd_line.contains("--build_tests_only"), "cmd: {}", cmd_line);
+        assert!(
+            cmd_line.contains("--compilation_mode=fastbuild"),
+            "cmd: {}",
+            cmd_line
+        );
+        assert!(
+            cmd_line.contains("--test_tag_filters=-disabled-ci"),
+            "cmd: {}",
+            cmd_line
+        );
+    }
+
+    #[test]
+    fn static_target_keeps_both_inline_and_structured_config() {
+        let p = pipeline! {
+            env: {},
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    config: "ci-buildkite",
+                    flags: ["--build_tests_only", "--config=ci"],
+                    label: "static-merged",
+                    key: "static-merged"
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        let cmd_line = yaml
+            .lines()
+            .find(|l| l.contains("bazel test"))
+            .unwrap_or_else(|| panic!("no bazel test command in yaml: {}", yaml));
+        let config_count = cmd_line.matches("--config=ci").count();
+        assert_eq!(
+            config_count, 2,
+            "expected both inline and structured --config=ci to be emitted, got {} in {:?}",
+            config_count, cmd_line
+        );
+        assert!(cmd_line.contains("--build_tests_only"), "cmd: {}", cmd_line);
+    }
 }
 
 mod comptime_flags {

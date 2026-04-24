@@ -4158,7 +4158,28 @@ impl CommandValue {
                 let target_var = format!("__target_{}", cmd_idx);
 
                 let (flags_validation, flags_tokens) = match flags {
-                    Some(dv) => dv.to_tokens_with_flags_validation(verb, &flags_var),
+                    Some(dv) if extra_flags.is_empty() => {
+                        dv.to_tokens_with_flags_validation(verb, &flags_var)
+                    }
+                    Some(dv) => {
+                        let extra_joined = extra_flags.join(" ");
+                        let flags_ident =
+                            syn::Ident::new(&flags_var, proc_macro2::Span::call_site());
+                        let inner = dv.to_tokens();
+                        let validation = quote! {
+                            let #flags_ident = {
+                                let __dyn: String = (#inner).to_string();
+                                let __val: String = if __dyn.is_empty() {
+                                    #extra_joined.to_string()
+                                } else {
+                                    format!("{} {}", __dyn, #extra_joined)
+                                };
+                                ::rust_buildkite::validation::validate_flags_str(#verb, &__val);
+                                __val
+                            };
+                        };
+                        (validation, quote! { #flags_ident })
+                    }
                     None if !extra_flags.is_empty() => {
                         let joined = extra_flags.join(" ");
                         let flags_ident =
