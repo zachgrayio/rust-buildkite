@@ -959,7 +959,7 @@ impl PipelineDef {
             }
         }
         let allow_missing: Vec<&str> = self.expect_paths.iter().map(|s| s.as_str()).collect();
-        self.validate_paths(&self.steps, &allow_missing)?;
+        Self::validate_paths(&self.steps, &allow_missing)?;
         let mut allowed_names: HashSet<String> = if let Some(allowed) = &self.allowed_commands {
             allowed.iter().map(|(s, _)| s.clone()).collect()
         } else {
@@ -969,7 +969,7 @@ impl PipelineDef {
             allowed_names.insert(cmd.clone());
         }
         let allowed_refs: HashSet<&str> = allowed_names.iter().map(|s| s.as_str()).collect();
-        self.validate_commands(&self.steps, &allowed_refs)?;
+        Self::validate_commands(&self.steps, &allowed_refs)?;
         self.validate_env_vars(&self.steps)?;
 
         let step_tokens: Vec<TokenStream2> = self
@@ -1118,7 +1118,7 @@ impl PipelineDef {
     /// Note: Raw strings are already rejected at parse time - cmd!() is always required.
     /// Note: Path-based commands (./script, /path/to/cmd, relative/path) bypass allowlist -
     ///       they're validated separately by validate_paths() for existence.
-    fn validate_commands(&self, steps: &[StepDef], allowed: &HashSet<&str>) -> Result<()> {
+    fn validate_commands(steps: &[StepDef], allowed: &HashSet<&str>) -> Result<()> {
         if should_skip_comptime_validation() {
             return Ok(());
         }
@@ -1151,7 +1151,7 @@ impl PipelineDef {
                     }
                 }
                 StepDef::Group(group) => {
-                    self.validate_commands(&group.steps, allowed)?;
+                    Self::validate_commands(&group.steps, allowed)?;
                 }
                 _ => {}
             }
@@ -1161,7 +1161,7 @@ impl PipelineDef {
 
     /// Validate that path-based commands (./script.sh, /usr/bin/env, dir/script.sh) exist at compile time.
     /// Paths in allow_missing are skipped (for runtime-only paths).
-    fn validate_paths(&self, steps: &[StepDef], allow_missing: &[&str]) -> Result<()> {
+    fn validate_paths(steps: &[StepDef], allow_missing: &[&str]) -> Result<()> {
         if should_skip_comptime_validation() {
             return Ok(());
         }
@@ -1180,7 +1180,7 @@ impl PipelineDef {
                     }
                 }
                 StepDef::Group(group) => {
-                    self.validate_paths(&group.steps, allow_missing)?;
+                    Self::validate_paths(&group.steps, allow_missing)?;
                 }
                 _ => {}
             }
@@ -1223,14 +1223,10 @@ impl PipelineDef {
             return Ok(());
         }
 
-        self.validate_env_vars_in_steps(steps, &allowed_vars)
+        Self::validate_env_vars_in_steps(steps, &allowed_vars)
     }
 
-    fn validate_env_vars_in_steps(
-        &self,
-        steps: &[StepDef],
-        allowed: &HashSet<String>,
-    ) -> Result<()> {
+    fn validate_env_vars_in_steps(steps: &[StepDef], allowed: &HashSet<String>) -> Result<()> {
         for step in steps {
             match step {
                 StepDef::Command(cmd_step) => {
@@ -1259,7 +1255,7 @@ impl PipelineDef {
                     }
                 }
                 StepDef::Group(group) => {
-                    self.validate_env_vars_in_steps(&group.steps, allowed)?;
+                    Self::validate_env_vars_in_steps(&group.steps, allowed)?;
                 }
                 _ => {}
             }
@@ -1276,12 +1272,11 @@ impl PipelineDef {
         }
 
         let mut used = HashSet::new();
-        self.collect_used_env_vars_from_steps(steps, &allowed, &mut used);
+        Self::collect_used_env_vars_from_steps(steps, &allowed, &mut used);
         used
     }
 
     fn collect_used_env_vars_from_steps(
-        &self,
         steps: &[StepDef],
         allowed: &HashSet<String>,
         used: &mut HashSet<String>,
@@ -1302,7 +1297,7 @@ impl PipelineDef {
                     }
                 }
                 StepDef::Group(group) => {
-                    self.collect_used_env_vars_from_steps(&group.steps, allowed, used);
+                    Self::collect_used_env_vars_from_steps(&group.steps, allowed, used);
                 }
                 _ => {}
             }
