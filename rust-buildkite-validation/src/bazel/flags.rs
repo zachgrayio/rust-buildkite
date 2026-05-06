@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_filter_excludes_target_subtractions() {
-        let flags = vec!["-//foo:bar", "--config=ci", "-@external//lib"];
+        let flags = ["-//foo:bar", "--config=ci", "-@external//lib"];
         let filtered: Vec<&str> = flags
             .iter()
             .filter(|f| f.starts_with('-') && !f.starts_with("-//") && !f.starts_with("-@"))

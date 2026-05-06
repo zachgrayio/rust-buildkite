@@ -1,0 +1,15 @@
+[package]
+name = "rust-buildkite-bep"
+version = "0.1.0"
+edition = "2024"
+description = "Bazel Build Event Protocol (BEP) types and dry-run helpers for rust-buildkite"
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+tonic = { version = "0.13", default-features = false, features = ["codegen", "prost"] }
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3.2.0"
+tonic-build = "0.13"

@@ -17,17 +17,14 @@ regex = "1.10"
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 
-prost = { version = "0.13", optional = true }
-prost-types = { version = "0.13", optional = true }
-tonic = { version = "0.13", optional = true }
-
+rust-buildkite-bep = { path = "../rust-buildkite-bep", optional = true }
 rust-buildkite-validation = { path = "../rust-buildkite-validation" }
-
-[build-dependencies]
-prost-build = { version = "0.13", optional = true }
-protoc-bin-vendored = { version = "3.2.0", optional = true }
-tonic-build = { version = "0.13", optional = true }
 
 [features]
 default = []
-bazel = ["prost", "prost-types", "tonic", "prost-build", "protoc-bin-vendored", "tonic-build", "rust-buildkite-validation/bazel", "serde", "serde_json"]
+bazel = [
+    "dep:rust-buildkite-bep",
+    "rust-buildkite-validation/bazel",
+    "serde",
+    "serde_json",
+]

@@ -21,7 +21,7 @@
 mod bazel;
 
 #[cfg(feature = "bazel")]
-mod bep;
+use rust_buildkite_bep as bep;
 
 #[cfg(feature = "bazel")]
 mod debug;

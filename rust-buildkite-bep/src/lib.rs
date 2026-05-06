@@ -1,11 +1,18 @@
 //! Build Event Protocol (BEP) parsing for dry-run analysis.
 
-use crate::debug::debug_log;
 use prost::Message;
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::time::Instant;
+
+macro_rules! debug_log {
+    ($module:expr, $($arg:tt)*) => {
+        if std::env::var("RUST_LOG").is_ok() {
+            eprintln!("[DEBUG rust_buildkite_bep::{}] {}", $module, format_args!($($arg)*));
+        }
+    };
+}
 
 #[allow(dead_code)]
 #[allow(clippy::all)]

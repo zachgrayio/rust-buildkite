@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "rust-buildkite-bep",
     "rust-buildkite-macros",
     "rust-buildkite-validation",
 ]
@@ -12,12 +13,17 @@ edition = "2024"
 
 [features]
 default = []
-bazel = ["rust-buildkite-macros/bazel", "rust-buildkite-validation/bazel"]
+bazel = [
+    "dep:rust-buildkite-bep",
+    "rust-buildkite-macros/bazel",
+    "rust-buildkite-validation/bazel",
+]
 
 [dependencies]
 async-trait = "0.1"
 inventory = "0.3"
 regress = "0.10"
+rust-buildkite-bep = { path = "rust-buildkite-bep", optional = true }
 rust-buildkite-macros = { path = "rust-buildkite-macros" }
 rust-buildkite-validation = { path = "rust-buildkite-validation" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "rustls-tls"] }

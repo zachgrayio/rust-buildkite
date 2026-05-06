@@ -153,6 +153,9 @@ pub use rust_buildkite_macros::{cmd, pipeline, register};
 #[cfg(feature = "bazel")]
 pub use rust_buildkite_macros::{bazel, comptime, comptime_shell, runtime};
 
+#[cfg(feature = "bazel")]
+pub use rust_buildkite_bep as bep;
+
 pub use inventory;
 
 pub mod registry;
