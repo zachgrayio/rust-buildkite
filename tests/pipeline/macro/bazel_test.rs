@@ -168,7 +168,9 @@ mod shorthand_macros {
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(yaml.contains("command: bazel run //foo:bar -- --flag value --verbose"));
+        assert!(yaml.contains(
+            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --flag value --verbose"
+        ));
     }
 
     #[test]
@@ -183,7 +185,9 @@ mod shorthand_macros {
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(yaml.contains("command: bazel run //foo:bar -- --help"));
+        assert!(yaml.contains(
+            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --help"
+        ));
     }
 
     #[test]
@@ -199,7 +203,9 @@ mod shorthand_macros {
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(yaml.contains("command: bazel run --jobs=8 //foo:bar -- --program-flag value"));
+        assert!(yaml.contains(
+            "command: bazel run --jobs=8 //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --program-flag value"
+        ));
     }
 
     #[test]
@@ -215,7 +221,9 @@ mod shorthand_macros {
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(yaml.contains("command: bazel run --config=ci //tools:deploy -- --env prod"));
+        assert!(yaml.contains(
+            "command: bazel run --config=ci //tools:deploy --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --env prod"
+        ));
     }
 
     #[test]
