@@ -628,6 +628,7 @@ struct PipelineDef {
     secrets: Option<SecretsValue>,
     priority: Option<i64>,
     default_plugins: Vec<NestedValue>,
+    bazel_codegen_config: BazelCodegenConfig,
 }
 
 impl Parse for PipelineDef {
@@ -646,6 +647,7 @@ impl Parse for PipelineDef {
         let mut secrets = None;
         let mut priority = None;
         let mut default_plugins = Vec::new();
+        let mut bazel_codegen_config = BazelCodegenConfig::DEFAULT;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -898,6 +900,14 @@ impl Parse for PipelineDef {
                         }
                     }
                 }
+                "use_buildkite_job_invocation_id" => {
+                    let lit: syn::LitBool = input.parse()?;
+                    bazel_codegen_config.use_buildkite_job_invocation_id = lit.value;
+                }
+                "set_build_event_binary_file_path" => {
+                    let lit: syn::LitBool = input.parse()?;
+                    bazel_codegen_config.set_build_event_binary_file_path = lit.value;
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -926,6 +936,7 @@ impl Parse for PipelineDef {
             secrets,
             priority,
             default_plugins,
+            bazel_codegen_config,
         })
     }
 }
@@ -975,7 +986,12 @@ impl PipelineDef {
         let step_tokens: Vec<TokenStream2> = self
             .steps
             .iter()
-            .map(|s| s.to_tokens_with_default_plugins(&self.default_plugins))
+            .map(|s| {
+                s.to_tokens_with_default_plugins_and_bazel_config(
+                    &self.default_plugins,
+                    self.bazel_codegen_config,
+                )
+            })
             .collect();
         let env_tokens = if let Some(env_vars) = &self.env {
             let env_inserts: Vec<TokenStream2> = env_vars
@@ -3670,25 +3686,39 @@ impl StepDef {
         }
     }
 
-    /// Generate tokens for this step with default plugins merged in
-    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+    /// Generate tokens for this step with default plugins merged in plus
+    /// per-pipeline Bazel codegen knobs (e.g. opt out of
+    /// `--invocation_id=$BUILDKITE_JOB_ID`).
+    fn to_tokens_with_default_plugins_and_bazel_config(
+        &self,
+        default_plugins: &[NestedValue],
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         match self {
-            StepDef::Command(c) => c.to_tokens_with_default_plugins(default_plugins),
+            StepDef::Command(c) => {
+                c.to_tokens_with_default_plugins_and_bazel_config(default_plugins, bazel_config)
+            }
             StepDef::Wait(w) => w.to_tokens_inner(),
             StepDef::Block(b) => b.to_tokens_inner(),
             StepDef::Input(i) => i.to_tokens_inner(),
             StepDef::Trigger(t) => t.to_tokens_inner(),
-            StepDef::Group(g) => g.to_tokens_with_default_plugins(default_plugins),
+            StepDef::Group(g) => {
+                g.to_tokens_with_default_plugins_and_bazel_config(default_plugins, bazel_config)
+            }
         }
     }
 
     /// Generate tokens for this step as a GroupStepsItem with default plugins
-    fn to_group_step_tokens_with_default_plugins(
+    fn to_group_step_tokens_with_default_plugins_and_bazel_config(
         &self,
         default_plugins: &[NestedValue],
+        bazel_config: BazelCodegenConfig,
     ) -> TokenStream2 {
         match self {
-            StepDef::Command(c) => c.to_group_step_tokens_with_default_plugins(default_plugins),
+            StepDef::Command(c) => c.to_group_step_tokens_with_default_plugins_and_bazel_config(
+                default_plugins,
+                bazel_config,
+            ),
             StepDef::Wait(w) => w.to_group_step_tokens(),
             StepDef::Block(b) => b.to_group_step_tokens(),
             StepDef::Input(i) => i.to_group_step_tokens(),
@@ -3961,6 +3991,55 @@ impl KeyValue {
     }
 }
 
+#[cfg(feature = "bazel")]
+const BAZEL_INVOCATION_ID_FLAG: &str = "--invocation_id=$BUILDKITE_JOB_ID";
+
+#[cfg(feature = "bazel")]
+const BAZEL_BEP_FILE_FLAG: &str =
+    "--build_event_binary_file=$BUILDKITE_BUILD_PATH/bep/bep-$BUILDKITE_JOB_ID.pb";
+
+#[derive(Clone, Copy)]
+struct BazelCodegenConfig {
+    use_buildkite_job_invocation_id: bool,
+    set_build_event_binary_file_path: bool,
+}
+
+impl BazelCodegenConfig {
+    const DEFAULT: Self = Self {
+        use_buildkite_job_invocation_id: true,
+        set_build_event_binary_file_path: true,
+    };
+}
+
+impl Default for BazelCodegenConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+#[cfg(feature = "bazel")]
+fn verb_supports_bep_capture(verb: &str) -> bool {
+    matches!(
+        verb.trim(),
+        "build" | "test" | "run" | "coverage" | "cquery" | "aquery"
+    )
+}
+
+#[cfg(feature = "bazel")]
+fn bazel_runtime_flag_suffix(verb: &str, config: BazelCodegenConfig) -> String {
+    if !verb_supports_bep_capture(verb) {
+        return String::new();
+    }
+    let mut parts: Vec<&str> = Vec::with_capacity(2);
+    if config.use_buildkite_job_invocation_id {
+        parts.push(BAZEL_INVOCATION_ID_FLAG);
+    }
+    if config.set_build_event_binary_file_path {
+        parts.push(BAZEL_BEP_FILE_FLAG);
+    }
+    parts.join(" ")
+}
+
 #[derive(Clone)]
 struct CommandValue(CommandSource);
 
@@ -4111,11 +4190,20 @@ impl CommandValue {
     }
 
     #[cfg(feature = "bazel")]
-    fn to_bazel_tokens_with_validation(&self, cmd_idx: usize) -> TokenStream2 {
+    fn to_bazel_tokens_with_validation(
+        &self,
+        cmd_idx: usize,
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         match &self.0 {
             CommandSource::Bazel(bazel) => {
-                let cmd_string = format!("bazel {}", bazel.command);
                 let verb = &bazel.verb;
+                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
+                let cmd_string = if bep_suffix.is_empty() {
+                    format!("bazel {}", bazel.command)
+                } else {
+                    format!("bazel {} {}", bazel.command, bep_suffix)
+                };
                 let command = &bazel.command;
 
                 let args: Vec<&str> = command.split_whitespace().collect();
@@ -4215,12 +4303,13 @@ impl CommandValue {
                     &format!("__args_{}", cmd_idx),
                     proc_macro2::Span::call_site(),
                 );
+                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
                 quote! {
                     {
                         #flags_validation
                         #target_validation
                         let #args_var = #args_tokens;
-                        format!("bazel {} {} {} {}", #base_cmd, #flags_tokens, #target_tokens, #args_var)
+                        format!("bazel {} {} {} {} {}", #base_cmd, #flags_tokens, #bep_suffix, #target_tokens, #args_var)
                             .split_whitespace().collect::<Vec<_>>().join(" ")
                     }
                 }
@@ -4661,7 +4750,27 @@ impl CommandStepDef {
             .collect()
     }
 
+    fn artifact_paths_tokens(&self) -> TokenStream2 {
+        if self.artifact_paths.is_empty() {
+            return quote! {};
+        }
+        let paths = &self.artifact_paths;
+        quote! {
+            .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
+                #(#paths.to_string()),*
+            ])))
+        }
+    }
+
     fn to_tokens_inner(&self) -> TokenStream2 {
+        self.to_tokens_inner_with_bazel_config(BazelCodegenConfig::DEFAULT)
+    }
+
+    fn to_tokens_inner_with_bazel_config(
+        &self,
+        #[cfg_attr(not(feature = "bazel"), allow(unused_variables))]
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         assert!(!self.commands.is_empty(), "commands must not be empty");
 
         let cmd_token_list: Vec<TokenStream2> = self
@@ -4674,7 +4783,7 @@ impl CommandStepDef {
                     &cmd_value.0,
                     CommandSource::Bazel(_) | CommandSource::DynamicBazel { .. }
                 ) {
-                    return cmd_value.to_bazel_tokens_with_validation(_idx);
+                    return cmd_value.to_bazel_tokens_with_validation(_idx, bazel_config);
                 }
                 cmd_value.to_shell_tokens_with_validation()
             })
@@ -4735,16 +4844,7 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let artifact_tokens = if !self.artifact_paths.is_empty() {
-            let paths = &self.artifact_paths;
-            quote! {
-                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
-        } else {
-            quote! {}
-        };
+        let artifact_tokens = self.artifact_paths_tokens();
 
         let env_tokens = if !self.env.is_empty() {
             let env_inserts: Vec<TokenStream2> = self
@@ -4961,9 +5061,14 @@ impl CommandStepDef {
         }
     }
 
-    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+    fn to_tokens_with_default_plugins_and_bazel_config(
+        &self,
+        default_plugins: &[NestedValue],
+        #[cfg_attr(not(feature = "bazel"), allow(unused_variables))]
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         if default_plugins.is_empty() {
-            return self.to_tokens_inner();
+            return self.to_tokens_inner_with_bazel_config(bazel_config);
         }
 
         let all_plugins: Vec<&NestedValue> =
@@ -4981,7 +5086,7 @@ impl CommandStepDef {
                     &cmd_value.0,
                     CommandSource::Bazel(_) | CommandSource::DynamicBazel { .. }
                 ) {
-                    return cmd_value.to_bazel_tokens_with_validation(_idx);
+                    return cmd_value.to_bazel_tokens_with_validation(_idx, bazel_config);
                 }
                 cmd_value.to_shell_tokens_with_validation()
             })
@@ -5042,16 +5147,7 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let artifact_tokens = if !self.artifact_paths.is_empty() {
-            let paths = &self.artifact_paths;
-            quote! {
-                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
-        } else {
-            quote! {}
-        };
+        let artifact_tokens = self.artifact_paths_tokens();
 
         let env_tokens = if !self.env.is_empty() {
             let env_inserts: Vec<TokenStream2> = self
@@ -5267,6 +5363,14 @@ impl CommandStepDef {
     }
 
     fn to_group_step_tokens(&self) -> TokenStream2 {
+        self.to_group_step_tokens_with_bazel_config(BazelCodegenConfig::DEFAULT)
+    }
+
+    fn to_group_step_tokens_with_bazel_config(
+        &self,
+        #[cfg_attr(not(feature = "bazel"), allow(unused_variables))]
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         assert!(!self.commands.is_empty(), "commands must not be empty");
 
         let cmd_token_list: Vec<TokenStream2> = self
@@ -5279,7 +5383,7 @@ impl CommandStepDef {
                     &cmd_value.0,
                     CommandSource::Bazel(_) | CommandSource::DynamicBazel { .. }
                 ) {
-                    return cmd_value.to_bazel_tokens_with_validation(_idx);
+                    return cmd_value.to_bazel_tokens_with_validation(_idx, bazel_config);
                 }
                 cmd_value.to_shell_tokens_with_validation()
             })
@@ -5340,16 +5444,7 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let artifact_tokens = if !self.artifact_paths.is_empty() {
-            let paths: Vec<_> = self.artifact_paths.iter().collect();
-            quote! {
-                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
-        } else {
-            quote! {}
-        };
+        let artifact_tokens = self.artifact_paths_tokens();
 
         let env_tokens = if !self.env.is_empty() {
             let inserts: Vec<TokenStream2> = self.env.iter().map(|(k, v)| {
@@ -5556,13 +5651,15 @@ impl CommandStepDef {
         }
     }
 
-    /// Generate tokens for GroupStepsItem::CommandStep with default plugins merged
-    fn to_group_step_tokens_with_default_plugins(
+    /// Generate tokens for GroupStepsItem::CommandStep with default plugins
+    fn to_group_step_tokens_with_default_plugins_and_bazel_config(
         &self,
         default_plugins: &[NestedValue],
+        #[cfg_attr(not(feature = "bazel"), allow(unused_variables))]
+        bazel_config: BazelCodegenConfig,
     ) -> TokenStream2 {
         if default_plugins.is_empty() {
-            return self.to_group_step_tokens();
+            return self.to_group_step_tokens_with_bazel_config(bazel_config);
         }
 
         let all_plugins: Vec<&NestedValue> =
@@ -5580,7 +5677,7 @@ impl CommandStepDef {
                     &cmd_value.0,
                     CommandSource::Bazel(_) | CommandSource::DynamicBazel { .. }
                 ) {
-                    return cmd_value.to_bazel_tokens_with_validation(_idx);
+                    return cmd_value.to_bazel_tokens_with_validation(_idx, bazel_config);
                 }
                 cmd_value.to_shell_tokens_with_validation()
             })
@@ -5641,16 +5738,7 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let artifact_tokens = if !self.artifact_paths.is_empty() {
-            let paths: Vec<_> = self.artifact_paths.iter().collect();
-            quote! {
-                .artifact_paths(Some(::rust_buildkite::CommandStepArtifactPaths::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
-        } else {
-            quote! {}
-        };
+        let artifact_tokens = self.artifact_paths_tokens();
 
         let env_tokens = if !self.env.is_empty() {
             let inserts: Vec<TokenStream2> = self
@@ -6890,7 +6978,11 @@ impl GroupStepDef {
     }
 
     /// Generate tokens with default plugins applied to nested steps
-    fn to_tokens_with_default_plugins(&self, default_plugins: &[NestedValue]) -> TokenStream2 {
+    fn to_tokens_with_default_plugins_and_bazel_config(
+        &self,
+        default_plugins: &[NestedValue],
+        bazel_config: BazelCodegenConfig,
+    ) -> TokenStream2 {
         let label = self.label.as_ref().expect("group label must be set");
 
         let key_tokens = if let Some(key) = &self.key {
@@ -6916,7 +7008,12 @@ impl GroupStepDef {
         let nested_steps: Vec<TokenStream2> = self
             .steps
             .iter()
-            .map(|s| s.to_group_step_tokens_with_default_plugins(default_plugins))
+            .map(|s| {
+                s.to_group_step_tokens_with_default_plugins_and_bazel_config(
+                    default_plugins,
+                    bazel_config,
+                )
+            })
             .collect();
         let steps_tokens = quote! {
             .steps(::rust_buildkite::GroupSteps(vec![
