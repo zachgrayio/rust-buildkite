@@ -4198,11 +4198,12 @@ impl CommandValue {
         match &self.0 {
             CommandSource::Bazel(bazel) => {
                 let verb = &bazel.verb;
-                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
+                let effective = bazel.bep_overrides.apply(bazel_config);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
                 let cmd_string = if bep_suffix.is_empty() {
                     format!("bazel {}", bazel.command)
                 } else {
-                    format!("bazel {} {}", bazel.command, bep_suffix)
+                    inject_before_arg_separator(&bazel.command, &bep_suffix)
                 };
                 let command = &bazel.command;
 
