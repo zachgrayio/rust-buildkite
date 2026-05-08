@@ -167,7 +167,10 @@ mod verb_gating {
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
-        assert!(!yaml.contains(INVOCATION_ID_FLAG), "info must skip:\n{yaml}");
+        assert!(
+            !yaml.contains(INVOCATION_ID_FLAG),
+            "info must skip:\n{yaml}"
+        );
         assert!(!yaml.contains(BEP_FILE_FLAG), "info must skip:\n{yaml}");
     }
 
@@ -351,5 +354,97 @@ mod dynamic_bazel {
         assert!(!yaml.contains(INVOCATION_ID_FLAG));
         assert!(!yaml.contains(BEP_FILE_FLAG));
         assert!(yaml.contains("--test_output=errors"));
+    }
+}
+
+mod arg_separator_placement {
+    use super::*;
+
+    fn bazel_cmd(p: &rust_buildkite::JsonSchemaForBuildkitePipelineConfigurationFiles) -> String {
+        let yaml = serde_yaml::to_string(p).unwrap();
+        for line in yaml.lines() {
+            let trimmed = line.trim_start().trim_start_matches("- ");
+            if let Some(rest) = trimmed.strip_prefix("command: bazel ") {
+                return format!("bazel {}", rest);
+            }
+        }
+        panic!("no `command: bazel ...` line in:\n{yaml}");
+    }
+
+    #[test]
+    fn bazel_run_with_args_places_bep_flags_before_double_dash() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//tools/sonarqube-scanner:scan",
+                    args: ["--branch", "x", "--pr", "y"],
+                    label: "scan",
+                }
+            ]
+        };
+        let cmd = bazel_cmd(&p);
+
+        let dd_idx = cmd
+            .split_whitespace()
+            .position(|t| t == "--")
+            .unwrap_or_else(|| panic!("no -- separator in: {cmd}"));
+        let inv_idx = cmd
+            .split_whitespace()
+            .position(|t| t.starts_with("--invocation_id="))
+            .unwrap_or_else(|| panic!("no --invocation_id in: {cmd}"));
+        let bep_idx = cmd
+            .split_whitespace()
+            .position(|t| t.starts_with("--build_event_binary_file="))
+            .unwrap_or_else(|| panic!("no --build_event_binary_file in: {cmd}"));
+
+        assert!(
+            inv_idx < dd_idx,
+            "--invocation_id must precede `--` separator (inv={inv_idx}, dd={dd_idx})\n  cmd: {cmd}"
+        );
+        assert!(
+            bep_idx < dd_idx,
+            "--build_event_binary_file must precede `--` separator (bep={bep_idx}, dd={dd_idx})\n  cmd: {cmd}"
+        );
+    }
+
+    #[test]
+    fn bazel_test_without_double_dash_appends_at_end() {
+        let p = pipeline! {
+            steps: [
+                bazel_test {
+                    target_patterns: "//...",
+                    label: "test",
+                }
+            ]
+        };
+        let cmd = bazel_cmd(&p);
+        assert!(!cmd.split_whitespace().any(|t| t == "--"), "cmd: {cmd}");
+        assert!(cmd.contains(INVOCATION_ID_FLAG), "cmd: {cmd}");
+        assert!(cmd.contains(BEP_FILE_FLAG), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn bazel_run_with_args_program_args_remain_after_double_dash() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//tools/sonarqube-scanner:scan",
+                    args: ["--branch", "main", "--pr", "42"],
+                    label: "scan",
+                }
+            ]
+        };
+        let cmd = bazel_cmd(&p);
+        let tokens: Vec<&str> = cmd.split_whitespace().collect();
+        let dd = tokens.iter().position(|t| *t == "--").unwrap();
+        let post: &[&str] = &tokens[dd + 1..];
+        assert!(
+            post.iter().any(|t| *t == "--branch"),
+            "--branch should remain in program args (after --), got post={post:?}"
+        );
+        assert!(
+            post.iter().any(|t| *t == "--pr"),
+            "--pr should remain in program args (after --), got post={post:?}"
+        );
     }
 }

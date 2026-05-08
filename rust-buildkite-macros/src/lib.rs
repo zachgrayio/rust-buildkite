@@ -3686,9 +3686,7 @@ impl StepDef {
         }
     }
 
-    /// Generate tokens for this step with default plugins merged in plus
-    /// per-pipeline Bazel codegen knobs (e.g. opt out of
-    /// `--invocation_id=$$BUILDKITE_JOB_ID`).
+    /// Generate tokens for this step with default plugins merged in
     fn to_tokens_with_default_plugins_and_bazel_config(
         &self,
         default_plugins: &[NestedValue],
@@ -4040,6 +4038,19 @@ fn bazel_runtime_flag_suffix(verb: &str, config: BazelCodegenConfig) -> String {
     parts.join(" ")
 }
 
+#[cfg(feature = "bazel")]
+fn inject_before_arg_separator(cmd: &str, injected: &str) -> String {
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    match tokens.iter().position(|t| *t == "--") {
+        None => format!("{} {}", cmd, injected),
+        Some(pos) => {
+            let pre = tokens[..pos].join(" ");
+            let post = tokens[pos..].join(" ");
+            format!("{} {} {}", pre, injected, post)
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CommandValue(CommandSource);
 
@@ -4198,12 +4209,14 @@ impl CommandValue {
         match &self.0 {
             CommandSource::Bazel(bazel) => {
                 let verb = &bazel.verb;
-                let effective = bazel.bep_overrides.apply(bazel_config);
-                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
                 let cmd_string = if bep_suffix.is_empty() {
                     format!("bazel {}", bazel.command)
                 } else {
-                    inject_before_arg_separator(&bazel.command, &bep_suffix)
+                    format!(
+                        "bazel {}",
+                        inject_before_arg_separator(&bazel.command, &bep_suffix)
+                    )
                 };
                 let command = &bazel.command;
 
