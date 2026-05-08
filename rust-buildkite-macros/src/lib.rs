@@ -3688,7 +3688,7 @@ impl StepDef {
 
     /// Generate tokens for this step with default plugins merged in plus
     /// per-pipeline Bazel codegen knobs (e.g. opt out of
-    /// `--invocation_id=$BUILDKITE_JOB_ID`).
+    /// `--invocation_id=$$BUILDKITE_JOB_ID`).
     fn to_tokens_with_default_plugins_and_bazel_config(
         &self,
         default_plugins: &[NestedValue],
@@ -3992,11 +3992,11 @@ impl KeyValue {
 }
 
 #[cfg(feature = "bazel")]
-const BAZEL_INVOCATION_ID_FLAG: &str = "--invocation_id=$BUILDKITE_JOB_ID";
+const BAZEL_INVOCATION_ID_FLAG: &str = "--invocation_id=$$BUILDKITE_JOB_ID";
 
 #[cfg(feature = "bazel")]
 const BAZEL_BEP_FILE_FLAG: &str =
-    "--build_event_binary_file=$BUILDKITE_BUILD_PATH/bep/bep-$BUILDKITE_JOB_ID.pb";
+    "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb";
 
 #[derive(Clone, Copy)]
 struct BazelCodegenConfig {

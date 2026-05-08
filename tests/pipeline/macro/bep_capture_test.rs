@@ -2,8 +2,8 @@
 //! performs on every supported `bazel_*` step.
 //!
 //! Two pipeline-level booleans control the injection (both default `true`):
-//!   * `use_buildkite_job_invocation_id`     -> `--invocation_id=$BUILDKITE_JOB_ID`
-//!   * `set_build_event_binary_file_path`    -> `--build_event_binary_file=$BUILDKITE_BUILD_PATH/bep/bep-$BUILDKITE_JOB_ID.pb`
+//!   * `use_buildkite_job_invocation_id`     -> `--invocation_id=$$BUILDKITE_JOB_ID`
+//!   * `set_build_event_binary_file_path`    -> `--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb`
 //!
 //! Injection only fires for verbs that produce a useful Bazel invocation
 //! (`build`/`test`/`run`/`coverage`/`cquery`/`aquery`); metadata verbs like
@@ -13,9 +13,9 @@
 
 use rust_buildkite::pipeline;
 
-const INVOCATION_ID_FLAG: &str = "--invocation_id=$BUILDKITE_JOB_ID";
+const INVOCATION_ID_FLAG: &str = "--invocation_id=$$BUILDKITE_JOB_ID";
 const BEP_FILE_FLAG: &str =
-    "--build_event_binary_file=$BUILDKITE_BUILD_PATH/bep/bep-$BUILDKITE_JOB_ID.pb";
+    "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb";
 
 mod defaults {
     use super::*;
@@ -118,7 +118,7 @@ mod defaults {
 
     #[test]
     fn invocation_id_uses_literal_buildkite_job_id() {
-        // The literal `$BUILDKITE_JOB_ID` reference must survive codegen
+        // The literal `$$BUILDKITE_JOB_ID` reference must survive codegen
         // intact: Buildkite's bash expands it before Bazel parses argv.
         let p = pipeline! {
             steps: [
@@ -130,8 +130,8 @@ mod defaults {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(
-            yaml.contains("--invocation_id=$BUILDKITE_JOB_ID"),
-            "expected literal $BUILDKITE_JOB_ID:\n{yaml}"
+            yaml.contains("--invocation_id=$$BUILDKITE_JOB_ID"),
+            "expected literal $$BUILDKITE_JOB_ID:\n{yaml}"
         );
     }
 
@@ -147,8 +147,8 @@ mod defaults {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(
-            yaml.contains("$BUILDKITE_BUILD_PATH/bep/bep-$BUILDKITE_JOB_ID.pb"),
-            "expected literal $BUILDKITE_BUILD_PATH and $BUILDKITE_JOB_ID:\n{yaml}"
+            yaml.contains("$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb"),
+            "expected literal $$BUILDKITE_BUILD_PATH and $$BUILDKITE_JOB_ID:\n{yaml}"
         );
     }
 }
