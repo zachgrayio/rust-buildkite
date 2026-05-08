@@ -15,7 +15,7 @@ use rust_buildkite::pipeline;
 
 const INVOCATION_ID_FLAG: &str = "--invocation_id=$$BUILDKITE_JOB_ID";
 const BEP_FILE_FLAG: &str =
-    "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb";
+    "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb";
 
 mod defaults {
     use super::*;
@@ -147,9 +147,39 @@ mod defaults {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(
-            yaml.contains("$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb"),
-            "expected literal $$BUILDKITE_BUILD_PATH and $$BUILDKITE_JOB_ID:\n{yaml}"
+            yaml.contains("$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb"),
+            "expected per-job folder layout:\n{yaml}"
         );
+    }
+}
+
+mod per_step_ordinal {
+    use super::*;
+
+    #[test]
+    fn three_chained_bazel_runs_get_distinct_bep_paths() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run { target_patterns: "//a:1" },
+                        bazel_run { target_patterns: "//b:2" },
+                        bazel_run { target_patterns: "//c:3" },
+                    ],
+                    label: "lint",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        for n in 0..3 {
+            let needle = format!(
+                "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-{n}.pb"
+            );
+            assert!(
+                yaml.contains(&needle),
+                "missing BEP file for cmd_idx={n}:\n{yaml}"
+            );
+        }
     }
 }
 

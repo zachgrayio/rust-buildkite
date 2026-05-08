@@ -169,7 +169,7 @@ mod shorthand_macros {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains(
-            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --flag value --verbose"
+            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb -- --flag value --verbose"
         ));
     }
 
@@ -186,7 +186,7 @@ mod shorthand_macros {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains(
-            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --help"
+            "command: bazel run //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb -- --help"
         ));
     }
 
@@ -204,7 +204,7 @@ mod shorthand_macros {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains(
-            "command: bazel run --jobs=8 //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --program-flag value"
+            "command: bazel run --jobs=8 //foo:bar --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb -- --program-flag value"
         ));
     }
 
@@ -222,7 +222,7 @@ mod shorthand_macros {
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
         assert!(yaml.contains(
-            "command: bazel run --config=ci //tools:deploy --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb -- --env prod"
+            "command: bazel run --config=ci //tools:deploy --invocation_id=$$BUILDKITE_JOB_ID --build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-0.pb -- --env prod"
         ));
     }
 

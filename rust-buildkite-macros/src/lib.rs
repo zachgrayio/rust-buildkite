@@ -4017,8 +4017,11 @@ impl KeyValue {
 const BAZEL_INVOCATION_ID_FLAG: &str = "--invocation_id=$$BUILDKITE_JOB_ID";
 
 #[cfg(feature = "bazel")]
-const BAZEL_BEP_FILE_FLAG: &str =
-    "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/bep-$$BUILDKITE_JOB_ID.pb";
+fn bazel_bep_file_flag(cmd_idx: usize) -> String {
+    format!(
+        "--build_event_binary_file=$$BUILDKITE_BUILD_PATH/bep/$$BUILDKITE_JOB_ID/bep-{cmd_idx}.pb"
+    )
+}
 
 #[derive(Clone, Copy)]
 struct BazelCodegenConfig {
@@ -4069,16 +4072,16 @@ fn verb_supports_bep_capture(verb: &str) -> bool {
 }
 
 #[cfg(feature = "bazel")]
-fn bazel_runtime_flag_suffix(verb: &str, config: BazelCodegenConfig) -> String {
+fn bazel_runtime_flag_suffix(verb: &str, config: BazelCodegenConfig, cmd_idx: usize) -> String {
     if !verb_supports_bep_capture(verb) {
         return String::new();
     }
-    let mut parts: Vec<&str> = Vec::with_capacity(2);
+    let mut parts: Vec<String> = Vec::with_capacity(2);
     if config.use_buildkite_job_invocation_id {
-        parts.push(BAZEL_INVOCATION_ID_FLAG);
+        parts.push(BAZEL_INVOCATION_ID_FLAG.to_string());
     }
     if config.set_build_event_binary_file_path {
-        parts.push(BAZEL_BEP_FILE_FLAG);
+        parts.push(bazel_bep_file_flag(cmd_idx));
     }
     parts.join(" ")
 }
@@ -4276,7 +4279,7 @@ impl CommandValue {
             CommandSource::Bazel(bazel) => {
                 let verb = &bazel.verb;
                 let effective = bazel.bep_overrides.apply(bazel_config);
-                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, effective, cmd_idx);
                 let cmd_string = if bep_suffix.is_empty() {
                     format!("bazel {}", bazel.command)
                 } else {
@@ -4386,7 +4389,7 @@ impl CommandValue {
                     &format!("__args_{}", cmd_idx),
                     proc_macro2::Span::call_site(),
                 );
-                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, effective, cmd_idx);
                 quote! {
                     {
                         #flags_validation
