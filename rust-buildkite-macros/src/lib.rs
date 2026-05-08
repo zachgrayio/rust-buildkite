@@ -2206,6 +2206,7 @@ impl StepDef {
         let mut validate_targets = true;
         let mut dry_run = false;
         let mut step_custom_verbs: Vec<String> = Vec::new();
+        let mut bep_overrides = BazelBepOverrides::default();
 
         while !content.is_empty() {
             let field: Ident = content.parse()?;
@@ -2307,6 +2308,14 @@ impl StepDef {
                 "dry_run" => {
                     let val: syn::LitBool = content.parse()?;
                     dry_run = val.value();
+                }
+                "use_buildkite_job_invocation_id" => {
+                    let val: syn::LitBool = content.parse()?;
+                    bep_overrides.use_buildkite_job_invocation_id = Some(val.value());
+                }
+                "set_build_event_binary_file_path" => {
+                    let val: syn::LitBool = content.parse()?;
+                    bep_overrides.set_build_event_binary_file_path = Some(val.value());
                 }
                 "args" => {
                     if content.peek(syn::token::Bracket) {
@@ -2474,13 +2483,15 @@ impl StepDef {
             || args.iter().any(|a| a.is_dynamic());
 
         if has_dynamic {
-            step.commands.push(CommandValue::from_dynamic_bazel(
-                verb.clone(),
-                flags_value,
-                extra_flags.clone(),
-                target_patterns,
-                args,
-            ));
+            step.commands
+                .push(CommandValue::from_dynamic_bazel_with_overrides(
+                    verb.clone(),
+                    flags_value,
+                    extra_flags.clone(),
+                    target_patterns,
+                    args,
+                    bep_overrides,
+                ));
         } else {
             let target_str = target_patterns
                 .as_ref()
@@ -2552,7 +2563,8 @@ impl StepDef {
             let mut all_custom_verbs: Vec<String> = pipeline_custom_verbs.to_vec();
             all_custom_verbs.extend(step_custom_verbs);
             let bazel_expr =
-                BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?;
+                BazelExpr::from_lit_str(&lit, validate_targets, dry_run, &all_custom_verbs)?
+                    .with_bep_overrides(bep_overrides);
             step.commands.push(CommandValue::from_bazel(bazel_expr));
         }
 
@@ -2594,6 +2606,7 @@ impl StepDef {
         let mut cmd_args: Vec<DynamicValue> = Vec::new();
         let mut cmd_validate_targets = validate_targets_default;
         let mut cmd_dry_run = dry_run_default;
+        let mut bep_overrides = BazelBepOverrides::default();
 
         while !cmd_content.is_empty() {
             let cmd_field: Ident = cmd_content.parse()?;
@@ -2696,6 +2709,14 @@ impl StepDef {
                     let val: syn::LitBool = cmd_content.parse()?;
                     cmd_dry_run = val.value();
                 }
+                "use_buildkite_job_invocation_id" => {
+                    let val: syn::LitBool = cmd_content.parse()?;
+                    bep_overrides.use_buildkite_job_invocation_id = Some(val.value());
+                }
+                "set_build_event_binary_file_path" => {
+                    let val: syn::LitBool = cmd_content.parse()?;
+                    bep_overrides.set_build_event_binary_file_path = Some(val.value());
+                }
                 "args" => {
                     if cmd_content.peek(syn::token::Bracket) {
                         let args_content;
@@ -2735,12 +2756,13 @@ impl StepDef {
             || cmd_args.iter().any(|a| a.is_dynamic());
 
         if has_dynamic {
-            Ok(CommandValue::from_dynamic_bazel(
+            Ok(CommandValue::from_dynamic_bazel_with_overrides(
                 verb.clone(),
                 flags_value,
                 extra_flags.clone(),
                 target_patterns,
                 cmd_args,
+                bep_overrides,
             ))
         } else {
             let target_str = target_patterns
@@ -2804,7 +2826,8 @@ impl StepDef {
                 cmd_validate_targets,
                 cmd_dry_run,
                 &all_custom_verbs,
-            )?;
+            )?
+            .with_bep_overrides(bep_overrides);
             Ok(CommandValue::from_bazel(bazel_expr))
         }
     }
@@ -3812,6 +3835,7 @@ enum CommandSource {
         extra_flags: Vec<String>,
         target: Option<DynamicValue>,
         args: Vec<DynamicValue>,
+        bep_overrides: BazelBepOverrides,
     },
 }
 
@@ -4015,6 +4039,27 @@ impl Default for BazelCodegenConfig {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "bazel"), allow(dead_code))]
+struct BazelBepOverrides {
+    use_buildkite_job_invocation_id: Option<bool>,
+    set_build_event_binary_file_path: Option<bool>,
+}
+
+#[cfg(feature = "bazel")]
+impl BazelBepOverrides {
+    fn apply(&self, base: BazelCodegenConfig) -> BazelCodegenConfig {
+        BazelCodegenConfig {
+            use_buildkite_job_invocation_id: self
+                .use_buildkite_job_invocation_id
+                .unwrap_or(base.use_buildkite_job_invocation_id),
+            set_build_event_binary_file_path: self
+                .set_build_event_binary_file_path
+                .unwrap_or(base.set_build_event_binary_file_path),
+        }
+    }
+}
+
 #[cfg(feature = "bazel")]
 fn verb_supports_bep_capture(verb: &str) -> bool {
     matches!(
@@ -4078,6 +4123,26 @@ impl CommandValue {
             extra_flags,
             target,
             args,
+            bep_overrides: BazelBepOverrides::default(),
+        })
+    }
+
+    #[cfg(feature = "bazel")]
+    fn from_dynamic_bazel_with_overrides(
+        base_cmd: String,
+        flags: Option<DynamicValue>,
+        extra_flags: Vec<String>,
+        target: Option<DynamicValue>,
+        args: Vec<DynamicValue>,
+        bep_overrides: BazelBepOverrides,
+    ) -> Self {
+        Self(CommandSource::DynamicBazel {
+            base_cmd,
+            flags,
+            extra_flags,
+            target,
+            args,
+            bep_overrides,
         })
     }
 
@@ -4095,6 +4160,7 @@ impl CommandValue {
                 extra_flags,
                 target,
                 args,
+                ..
             } => {
                 let flags_str = match flags {
                     Some(DynamicValue::Literal(s)) => s.clone(),
@@ -4209,7 +4275,8 @@ impl CommandValue {
         match &self.0 {
             CommandSource::Bazel(bazel) => {
                 let verb = &bazel.verb;
-                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
+                let effective = bazel.bep_overrides.apply(bazel_config);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
                 let cmd_string = if bep_suffix.is_empty() {
                     format!("bazel {}", bazel.command)
                 } else {
@@ -4249,8 +4316,10 @@ impl CommandValue {
                 extra_flags,
                 target,
                 args,
+                bep_overrides,
             } => {
                 let verb = base_cmd.trim();
+                let effective = bep_overrides.apply(bazel_config);
                 let flags_var = format!("__flags_{}", cmd_idx);
                 let target_var = format!("__target_{}", cmd_idx);
 
@@ -4317,7 +4386,7 @@ impl CommandValue {
                     &format!("__args_{}", cmd_idx),
                     proc_macro2::Span::call_site(),
                 );
-                let bep_suffix = bazel_runtime_flag_suffix(verb, bazel_config);
+                let bep_suffix = bazel_runtime_flag_suffix(verb, effective);
                 quote! {
                     {
                         #flags_validation
@@ -7485,6 +7554,9 @@ struct BazelExpr {
     undefined_vars: Vec<String>,
     /// Source span for error reporting
     span: proc_macro2::Span,
+    /// Per-call overrides for BEP-capture flag injection.
+    /// Default = inherit from the pipeline-level config.
+    bep_overrides: BazelBepOverrides,
 }
 
 #[cfg(feature = "bazel")]
@@ -7640,7 +7712,13 @@ impl BazelExpr {
             verb,
             undefined_vars,
             span,
+            bep_overrides: BazelBepOverrides::default(),
         })
+    }
+
+    fn with_bep_overrides(mut self, overrides: BazelBepOverrides) -> Self {
+        self.bep_overrides = overrides;
+        self
     }
 
     fn is_valid_verb(verb: &str, custom_verbs: &[String]) -> bool {

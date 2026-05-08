@@ -357,6 +357,112 @@ mod dynamic_bazel {
     }
 }
 
+mod per_call_overrides {
+    use super::*;
+
+    #[test]
+    fn per_call_opt_out_invocation_id_only() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    use_buildkite_job_invocation_id: false,
+                    label: "no-iid",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(!yaml.contains(INVOCATION_ID_FLAG), "yaml:\n{yaml}");
+        assert!(yaml.contains(BEP_FILE_FLAG), "yaml:\n{yaml}");
+    }
+
+    #[test]
+    fn per_call_opt_out_bep_file_only() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    set_build_event_binary_file_path: false,
+                    label: "no-bep",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains(INVOCATION_ID_FLAG), "yaml:\n{yaml}");
+        assert!(!yaml.contains(BEP_FILE_FLAG), "yaml:\n{yaml}");
+    }
+
+    #[test]
+    fn per_call_opt_out_both() {
+        let p = pipeline! {
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    use_buildkite_job_invocation_id: false,
+                    set_build_event_binary_file_path: false,
+                    label: "none",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(!yaml.contains(INVOCATION_ID_FLAG), "yaml:\n{yaml}");
+        assert!(!yaml.contains(BEP_FILE_FLAG), "yaml:\n{yaml}");
+    }
+
+    #[test]
+    fn per_call_override_wins_over_pipeline_default_on() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run {
+                            target_patterns: "//foo:keep",
+                        },
+                        bazel_run {
+                            target_patterns: "//foo:skip",
+                            use_buildkite_job_invocation_id: false,
+                            set_build_event_binary_file_path: false,
+                        }
+                    ],
+                    label: "mixed",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("//foo:keep"));
+        assert!(yaml.contains("//foo:skip"));
+        let count = yaml.matches("--invocation_id=").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly 1 --invocation_id, yaml:\n{yaml}"
+        );
+        let bep_count = yaml.matches("--build_event_binary_file=").count();
+        assert_eq!(
+            bep_count, 1,
+            "expected exactly 1 --build_event_binary_file, yaml:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn per_call_override_wins_over_pipeline_default_off() {
+        let p = pipeline! {
+            use_buildkite_job_invocation_id: false,
+            set_build_event_binary_file_path: false,
+            steps: [
+                bazel_run {
+                    target_patterns: "//foo:bar",
+                    use_buildkite_job_invocation_id: true,
+                    set_build_event_binary_file_path: true,
+                    label: "force-on",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains(INVOCATION_ID_FLAG), "yaml:\n{yaml}");
+        assert!(yaml.contains(BEP_FILE_FLAG), "yaml:\n{yaml}");
+    }
+}
+
 mod arg_separator_placement {
     use super::*;
 
