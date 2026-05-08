@@ -2159,7 +2159,45 @@ impl StepDef {
             ));
         }
 
+        #[cfg(feature = "bazel")]
+        Self::default_off_invocation_id_for_multi_bazel_steps(&mut step.commands);
+
         Ok(StepDef::Command(step))
+    }
+
+    #[cfg(feature = "bazel")]
+    fn default_off_invocation_id_for_multi_bazel_steps(commands: &mut [CommandValue]) {
+        let bazel_count = commands
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.0,
+                    CommandSource::Bazel(_) | CommandSource::DynamicBazel { .. }
+                )
+            })
+            .count();
+        if bazel_count <= 1 {
+            return;
+        }
+        for cmd in commands.iter_mut() {
+            match &mut cmd.0 {
+                CommandSource::Bazel(bazel) => {
+                    if bazel
+                        .bep_overrides
+                        .use_buildkite_job_invocation_id
+                        .is_none()
+                    {
+                        bazel.bep_overrides.use_buildkite_job_invocation_id = Some(false);
+                    }
+                }
+                CommandSource::DynamicBazel { bep_overrides, .. } => {
+                    if bep_overrides.use_buildkite_job_invocation_id.is_none() {
+                        bep_overrides.use_buildkite_job_invocation_id = Some(false);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     #[cfg(feature = "bazel")]

@@ -153,6 +153,72 @@ mod defaults {
     }
 }
 
+mod multi_bazel_step_default {
+    use super::*;
+
+    #[test]
+    fn three_chained_bazel_runs_default_off_invocation_id() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run { target_patterns: "//a:1" },
+                        bazel_run { target_patterns: "//b:2" },
+                        bazel_run { target_patterns: "//c:3" },
+                    ],
+                    label: "lint",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(
+            !yaml.contains("--invocation_id="),
+            "multi-bazel step should default invocation_id off:\n{yaml}"
+        );
+        for n in 0..3 {
+            assert!(yaml.contains(&format!("/bep-{n}.pb")), "yaml:\n{yaml}");
+        }
+    }
+
+    #[test]
+    fn single_bazel_step_keeps_invocation_id() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run { target_patterns: "//a:1" },
+                        cmd!("echo done"),
+                    ],
+                    label: "one",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains(INVOCATION_ID_FLAG), "yaml:\n{yaml}");
+    }
+
+    #[test]
+    fn explicit_opt_in_wins_over_multi_bazel_default() {
+        let p = pipeline! {
+            steps: [
+                command {
+                    commands: [
+                        bazel_run {
+                            target_patterns: "//a:1",
+                            use_buildkite_job_invocation_id: true,
+                        },
+                        bazel_run { target_patterns: "//b:2" },
+                    ],
+                    label: "force-on",
+                }
+            ]
+        };
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        let count = yaml.matches("--invocation_id=").count();
+        assert_eq!(count, 1, "yaml:\n{yaml}");
+    }
+}
+
 mod per_step_ordinal {
     use super::*;
 
@@ -443,19 +509,16 @@ mod per_call_overrides {
     fn per_call_override_wins_over_pipeline_default_on() {
         let p = pipeline! {
             steps: [
-                command {
-                    commands: [
-                        bazel_run {
-                            target_patterns: "//foo:keep",
-                        },
-                        bazel_run {
-                            target_patterns: "//foo:skip",
-                            use_buildkite_job_invocation_id: false,
-                            set_build_event_binary_file_path: false,
-                        }
-                    ],
-                    label: "mixed",
-                }
+                bazel_run {
+                    target_patterns: "//foo:keep",
+                    label: "keep",
+                },
+                bazel_run {
+                    target_patterns: "//foo:skip",
+                    use_buildkite_job_invocation_id: false,
+                    set_build_event_binary_file_path: false,
+                    label: "skip",
+                },
             ]
         };
         let yaml = serde_yaml::to_string(&p).unwrap();
