@@ -1726,7 +1726,15 @@ impl StepDef {
                 }
                 "cache" => {
                     let path: LitStr = args.parse()?;
-                    step.cache.push(path);
+                    match &mut step.cache {
+                        None => step.cache = Some(CacheConfig::Array(vec![path])),
+                        Some(CacheConfig::Array(paths))
+                        | Some(CacheConfig::Object { paths, .. }) => paths.push(path),
+                        Some(CacheConfig::String(prev)) => {
+                            let prev = prev.clone();
+                            step.cache = Some(CacheConfig::Array(vec![prev, path]));
+                        }
+                    }
                 }
                 "retry" => {
                     let retry_value = NestedValue::parse(&args)?;
@@ -2044,15 +2052,7 @@ impl StepDef {
                     step.if_condition = Some(condition);
                 }
                 "cache" => {
-                    let cache_content;
-                    bracketed!(cache_content in content);
-                    while !cache_content.is_empty() {
-                        let path: LitStr = cache_content.parse()?;
-                        step.cache.push(path);
-                        if cache_content.peek(Token![,]) {
-                            cache_content.parse::<Token![,]>()?;
-                        }
-                    }
+                    step.cache = Some(CacheConfig::parse(&content)?);
                 }
                 "retry" => {
                     let retry_value = NestedValue::parse(&content)?;
@@ -4485,7 +4485,7 @@ struct CommandStepDef {
     agents: Vec<(String, LitStr)>,
     branches: Vec<LitStr>,
     if_condition: Option<LitStr>,
-    cache: Vec<LitStr>,
+    cache: Option<CacheConfig>,
     retry: Option<RetryConfig>,
     plugins: Vec<NestedValue>,
     notify: Vec<NestedValue>,
@@ -4495,6 +4495,127 @@ struct CommandStepDef {
     skip: Option<SkipValue>,
     priority: Option<syn::LitInt>,
     allow_dependency_failure: bool,
+}
+
+/// Cache configuration for command steps (string, array of paths, or named/sized volume object)
+#[derive(Clone)]
+enum CacheConfig {
+    String(LitStr),
+    Array(Vec<LitStr>),
+    Object {
+        name: Option<LitStr>,
+        paths: Vec<LitStr>,
+        size: Option<LitStr>,
+    },
+}
+
+impl CacheConfig {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(LitStr) {
+            return Ok(Self::String(input.parse()?));
+        }
+        if input.peek(syn::token::Bracket) {
+            let cache_content;
+            bracketed!(cache_content in input);
+            let mut paths = Vec::new();
+            while !cache_content.is_empty() {
+                paths.push(cache_content.parse::<LitStr>()?);
+                if cache_content.peek(Token![,]) {
+                    cache_content.parse::<Token![,]>()?;
+                }
+            }
+            return Ok(Self::Array(paths));
+        }
+        if input.peek(syn::token::Brace) {
+            let obj_content;
+            braced!(obj_content in input);
+            let mut name: Option<LitStr> = None;
+            let mut paths: Option<Vec<LitStr>> = None;
+            let mut size: Option<LitStr> = None;
+
+            while !obj_content.is_empty() {
+                let key: Ident = obj_content.parse()?;
+                obj_content.parse::<Token![:]>()?;
+                match key.to_string().as_str() {
+                    "name" => {
+                        name = Some(obj_content.parse()?);
+                    }
+                    "paths" => {
+                        let paths_content;
+                        bracketed!(paths_content in obj_content);
+                        let mut list = Vec::new();
+                        while !paths_content.is_empty() {
+                            list.push(paths_content.parse::<LitStr>()?);
+                            if paths_content.peek(Token![,]) {
+                                paths_content.parse::<Token![,]>()?;
+                            }
+                        }
+                        paths = Some(list);
+                    }
+                    "size" => {
+                        let lit: LitStr = obj_content.parse()?;
+                        let val = lit.value();
+                        let valid = val.len() >= 2
+                            && val.ends_with('g')
+                            && val[..val.len() - 1].bytes().all(|b| b.is_ascii_digit());
+                        if !valid {
+                            return Err(Error::new(
+                                lit.span(),
+                                "cache size must match `^\\d+g$` (e.g. \"20g\", \"100g\")",
+                            ));
+                        }
+                        size = Some(lit);
+                    }
+                    other => {
+                        return Err(Error::new(
+                            key.span(),
+                            format!("unknown cache field `{other}`; expected `name`, `paths`, or `size`"),
+                        ));
+                    }
+                }
+                if obj_content.peek(Token![,]) {
+                    obj_content.parse::<Token![,]>()?;
+                }
+            }
+
+            let paths = paths.ok_or_else(|| {
+                Error::new(
+                    obj_content.span(),
+                    "cache object requires `paths: [...]`",
+                )
+            })?;
+            return Ok(Self::Object { name, paths, size });
+        }
+        Err(input.error("expected cache path string, array `[...]`, or object `{ paths: [...] }`"))
+    }
+
+    fn to_tokens(&self) -> TokenStream2 {
+        match self {
+            Self::String(s) => quote! { ::rust_buildkite::Cache::String(#s.to_string()) },
+            Self::Array(paths) => quote! {
+                ::rust_buildkite::Cache::Array(vec![#(#paths.to_string()),*])
+            },
+            Self::Object { name, paths, size } => {
+                let name_tokens = match name {
+                    Some(n) => quote! { Some(#n.to_string()) },
+                    None => quote! { None },
+                };
+                let size_tokens = match size {
+                    Some(s) => quote! {
+                        Some(#s.parse::<::rust_buildkite::CacheObjectSize>().expect("validated cache size"))
+                    },
+                    None => quote! { None },
+                };
+                quote! {
+                    ::rust_buildkite::Cache::Object {
+                        name: #name_tokens,
+                        paths: vec![#(#paths.to_string()),*],
+                        size: #size_tokens,
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Retry configuration for command steps
@@ -4799,7 +4920,7 @@ impl CommandStepDef {
             agents: Vec::new(),
             branches: Vec::new(),
             if_condition: None,
-            cache: Vec::new(),
+            cache: None,
             retry: None,
             plugins: Vec::new(),
             notify: Vec::new(),
@@ -4827,7 +4948,7 @@ impl CommandStepDef {
             agents: Vec::new(),
             branches: Vec::new(),
             if_condition: None,
-            cache: Vec::new(),
+            cache: None,
             retry: None,
             plugins: Vec::new(),
             notify: Vec::new(),
@@ -4854,7 +4975,7 @@ impl CommandStepDef {
             agents: Vec::new(),
             branches: Vec::new(),
             if_condition: None,
-            cache: Vec::new(),
+            cache: None,
             retry: None,
             plugins: Vec::new(),
             notify: Vec::new(),
@@ -5032,13 +5153,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let cache_tokens = if !self.cache.is_empty() {
-            let paths = &self.cache;
-            quote! {
-                .cache(Some(::rust_buildkite::Cache::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
+        let cache_tokens = if let Some(cache) = &self.cache {
+            let cache_val = cache.to_tokens();
+            quote! { .cache(Some(#cache_val)) }
         } else {
             quote! {}
         };
@@ -5335,13 +5452,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let cache_tokens = if !self.cache.is_empty() {
-            let paths = &self.cache;
-            quote! {
-                .cache(Some(::rust_buildkite::Cache::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
+        let cache_tokens = if let Some(cache) = &self.cache {
+            let cache_val = cache.to_tokens();
+            quote! { .cache(Some(#cache_val)) }
         } else {
             quote! {}
         };
@@ -5618,13 +5731,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let cache_tokens = if !self.cache.is_empty() {
-            let paths: Vec<_> = self.cache.iter().collect();
-            quote! {
-                .cache(Some(::rust_buildkite::Cache::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
+        let cache_tokens = if let Some(cache) = &self.cache {
+            let cache_val = cache.to_tokens();
+            quote! { .cache(Some(#cache_val)) }
         } else {
             quote! {}
         };
@@ -5920,13 +6029,9 @@ impl CommandStepDef {
             quote! {}
         };
 
-        let cache_tokens = if !self.cache.is_empty() {
-            let paths: Vec<_> = self.cache.iter().collect();
-            quote! {
-                .cache(Some(::rust_buildkite::Cache::Array(vec![
-                    #(#paths.to_string()),*
-                ])))
-            }
+        let cache_tokens = if let Some(cache) = &self.cache {
+            let cache_val = cache.to_tokens();
+            quote! { .cache(Some(#cache_val)) }
         } else {
             quote! {}
         };
