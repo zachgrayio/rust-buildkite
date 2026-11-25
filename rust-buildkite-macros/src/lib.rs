@@ -641,6 +641,8 @@ impl Parse for PipelineDef {
         let mut custom_verbs = Vec::new();
         let mut env = None;
         let mut steps = Vec::new();
+        let mut presets: std::collections::HashMap<String, PresetDef> =
+            std::collections::HashMap::new();
         let mut agents = Vec::new();
         let mut notify = Vec::new();
         let mut image = None;
@@ -889,6 +891,20 @@ impl Parse for PipelineDef {
                     let lit: syn::LitInt = input.parse()?;
                     priority = Some(lit.base10_parse()?);
                 }
+                "presets" => {
+                    let content;
+                    braced!(content in input);
+                    while !content.is_empty() {
+                        let name: Ident = content.parse()?;
+                        content.parse::<Token![:]>()?;
+                        let body;
+                        braced!(body in content);
+                        presets.insert(name.to_string(), PresetDef::parse(&body)?);
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
                 "default_plugins" => {
                     let content;
                     bracketed!(content in input);
@@ -921,6 +937,14 @@ impl Parse for PipelineDef {
             }
         }
 
+        // Resolution happens after the whole body is parsed, so `presets:` may be
+        // declared before or after the `steps:` that reference it.
+        for step in &mut steps {
+            if let StepDef::Command(command) = step {
+                resolve_preset(command, &presets)?;
+            }
+        }
+
         Ok(PipelineDef {
             allowed_commands,
             additional_commands,
@@ -939,6 +963,93 @@ impl Parse for PipelineDef {
             bazel_codegen_config,
         })
     }
+}
+
+/// Reusable per-step defaults, declared once at pipeline level and referenced by name from
+/// a `command` step with `preset: "name"`.
+///
+/// A step's own attributes win: `env` merges key-wise (the step's value wins), and `cache`
+/// / `timeout_in_minutes` are taken from the preset only when the step omits them.
+#[derive(Clone, Default)]
+struct PresetDef {
+    env: Vec<(String, DynamicValue)>,
+    cache: Option<CacheConfig>,
+    timeout_in_minutes: Option<syn::LitInt>,
+}
+
+impl PresetDef {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut preset = Self::default();
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "env" => {
+                    let content;
+                    braced!(content in input);
+                    while !content.is_empty() {
+                        let name: Ident = content.parse()?;
+                        content.parse::<Token![:]>()?;
+                        let value = DynamicValue::parse(&content)?;
+                        preset.env.push((name.to_string(), value));
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "cache" => preset.cache = Some(CacheConfig::parse(input)?),
+                "timeout_in_minutes" => preset.timeout_in_minutes = Some(input.parse()?),
+                other => {
+                    return Err(Error::new(
+                        key.span(),
+                        format!(
+                            "unknown preset field `{other}`; expected `env`, `cache` or `timeout_in_minutes`"
+                        ),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(preset)
+    }
+}
+
+fn resolve_preset(
+    step: &mut CommandStepDef,
+    presets: &std::collections::HashMap<String, PresetDef>,
+) -> Result<()> {
+    let Some(name) = step.preset.clone() else {
+        return Ok(());
+    };
+    let Some(preset) = presets.get(&name.value()) else {
+        let mut available: Vec<&str> = presets.keys().map(String::as_str).collect();
+        available.sort_unstable();
+        return Err(Error::new(
+            name.span(),
+            format!(
+                "unknown step preset `{}`; available presets: {}",
+                name.value(),
+                available.join(", ")
+            ),
+        ));
+    };
+    if step.cache.is_none() {
+        step.cache = preset.cache.clone();
+    }
+    if step.timeout_in_minutes.is_none() {
+        step.timeout_in_minutes = preset.timeout_in_minutes.clone();
+    }
+    let mut merged: Vec<(String, DynamicValue)> = preset
+        .env
+        .iter()
+        .filter(|(key, _)| !step.env.iter().any(|(step_key, _)| step_key == key))
+        .cloned()
+        .collect();
+    merged.append(&mut step.env);
+    step.env = merged;
+    Ok(())
 }
 
 impl PipelineDef {
@@ -2071,6 +2182,9 @@ impl StepDef {
                 "no_default_plugins" => {
                     let val: syn::LitBool = content.parse()?;
                     step.no_default_plugins = val.value();
+                }
+                "preset" => {
+                    step.preset = Some(content.parse()?);
                 }
                 "plugins" => {
                     let plugins_content;
@@ -4496,6 +4610,9 @@ struct CommandStepDef {
     /// needs the agent's own Docker daemon, say — cannot run inside the default `docker`
     /// plugin, and nothing else in the macro can express that.
     no_default_plugins: bool,
+    /// Name of a `presets:` entry whose `env`, `cache` and `timeout_in_minutes` this
+    /// step inherits, with its own attributes winning.
+    preset: Option<LitStr>,
     notify: Vec<NestedValue>,
     matrix: Option<NestedValue>,
     concurrency: Option<syn::LitInt>,
@@ -4932,6 +5049,7 @@ impl CommandStepDef {
             retry: None,
             plugins: Vec::new(),
             no_default_plugins: false,
+            preset: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -4961,6 +5079,7 @@ impl CommandStepDef {
             retry: None,
             plugins: Vec::new(),
             no_default_plugins: false,
+            preset: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -4989,6 +5108,7 @@ impl CommandStepDef {
             retry: None,
             plugins: Vec::new(),
             no_default_plugins: false,
+            preset: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
