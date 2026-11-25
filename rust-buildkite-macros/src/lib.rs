@@ -2186,6 +2186,9 @@ impl StepDef {
                 "preset" => {
                     step.preset = Some(content.parse()?);
                 }
+                "if_changed" => {
+                    step.if_changed = Some(IfChangedValue::parse(&content)?);
+                }
                 "plugins" => {
                     let plugins_content;
                     bracketed!(plugins_content in content);
@@ -4613,6 +4616,8 @@ struct CommandStepDef {
     /// Name of a `presets:` entry whose `env`, `cache` and `timeout_in_minutes` this
     /// step inherits, with its own attributes winning.
     preset: Option<LitStr>,
+    /// Glob(s) that skip this step when no changed file matches; agent-applied at upload.
+    if_changed: Option<IfChangedValue>,
     notify: Vec<NestedValue>,
     matrix: Option<NestedValue>,
     concurrency: Option<syn::LitInt>,
@@ -4694,7 +4699,9 @@ impl CacheConfig {
                     other => {
                         return Err(Error::new(
                             key.span(),
-                            format!("unknown cache field `{other}`; expected `name`, `paths`, or `size`"),
+                            format!(
+                                "unknown cache field `{other}`; expected `name`, `paths`, or `size`"
+                            ),
                         ));
                     }
                 }
@@ -4704,10 +4711,7 @@ impl CacheConfig {
             }
 
             let paths = paths.ok_or_else(|| {
-                Error::new(
-                    obj_content.span(),
-                    "cache object requires `paths: [...]`",
-                )
+                Error::new(obj_content.span(), "cache object requires `paths: [...]`")
             })?;
             return Ok(Self::Object { name, paths, size });
         }
@@ -5050,6 +5054,7 @@ impl CommandStepDef {
             plugins: Vec::new(),
             no_default_plugins: false,
             preset: None,
+            if_changed: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -5080,6 +5085,7 @@ impl CommandStepDef {
             plugins: Vec::new(),
             no_default_plugins: false,
             preset: None,
+            if_changed: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -5109,6 +5115,7 @@ impl CommandStepDef {
             plugins: Vec::new(),
             no_default_plugins: false,
             preset: None,
+            if_changed: None,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -5284,6 +5291,7 @@ impl CommandStepDef {
             quote! {}
         };
 
+        let if_changed_tokens = if_changed_tokens(&self.if_changed);
         let cache_tokens = if let Some(cache) = &self.cache {
             let cache_val = cache.to_tokens();
             quote! { .cache(Some(#cache_val)) }
@@ -5418,6 +5426,7 @@ impl CommandStepDef {
                     #branches_tokens
                     #if_tokens
                     #cache_tokens
+                    #if_changed_tokens
                     #retry_tokens
                     #plugins_tokens
                     #notify_tokens
@@ -5583,6 +5592,7 @@ impl CommandStepDef {
             quote! {}
         };
 
+        let if_changed_tokens = if_changed_tokens(&self.if_changed);
         let cache_tokens = if let Some(cache) = &self.cache {
             let cache_val = cache.to_tokens();
             quote! { .cache(Some(#cache_val)) }
@@ -5715,6 +5725,7 @@ impl CommandStepDef {
                     #branches_tokens
                     #if_tokens
                     #cache_tokens
+                    #if_changed_tokens
                     #retry_tokens
                     #plugins_tokens
                     #notify_tokens
@@ -5862,6 +5873,7 @@ impl CommandStepDef {
             quote! {}
         };
 
+        let if_changed_tokens = if_changed_tokens(&self.if_changed);
         let cache_tokens = if let Some(cache) = &self.cache {
             let cache_val = cache.to_tokens();
             quote! { .cache(Some(#cache_val)) }
@@ -6000,6 +6012,7 @@ impl CommandStepDef {
                     #branches_tokens
                     #if_tokens
                     #cache_tokens
+                    #if_changed_tokens
                     #retry_tokens
                     #plugins_tokens
                     #notify_tokens
@@ -6160,6 +6173,7 @@ impl CommandStepDef {
             quote! {}
         };
 
+        let if_changed_tokens = if_changed_tokens(&self.if_changed);
         let cache_tokens = if let Some(cache) = &self.cache {
             let cache_val = cache.to_tokens();
             quote! { .cache(Some(#cache_val)) }
@@ -6296,6 +6310,7 @@ impl CommandStepDef {
                     #branches_tokens
                     #if_tokens
                     #cache_tokens
+                    #if_changed_tokens
                     #retry_tokens
                     #plugins_tokens
                     #notify_tokens
@@ -8329,4 +8344,103 @@ mod quote_flag_values_tests {
             quoted
         );
     }
+}
+
+/// `if_changed` accepts a glob, a list of globs, or an include/exclude object. The Buildkite
+/// schema and SDK already model the attribute; only the DSL has to build the value.
+#[derive(Clone)]
+enum IfChangedValue {
+    Globs(Vec<String>),
+    Rules {
+        include: Vec<String>,
+        exclude: Vec<String>,
+    },
+}
+
+impl IfChangedValue {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(syn::token::Bracket) {
+            let content;
+            bracketed!(content in input);
+            return Ok(Self::Globs(glob_items(&content)?));
+        }
+        if input.peek(syn::token::Brace) {
+            let content;
+            braced!(content in input);
+            let mut include = None;
+            let mut exclude = Vec::new();
+            while !content.is_empty() {
+                let key: Ident = content.parse()?;
+                content.parse::<Token![:]>()?;
+                match key.to_string().as_str() {
+                    "include" => include = Some(glob_list(&content)?),
+                    "exclude" => exclude = glob_list(&content)?,
+                    other => {
+                        return Err(Error::new(
+                            key.span(),
+                            format!(
+                                "unknown if_changed field `{other}`; expected `include` or `exclude`"
+                            ),
+                        ));
+                    }
+                }
+                if content.peek(Token![,]) {
+                    content.parse::<Token![,]>()?;
+                }
+            }
+            let Some(include) = include else {
+                return Err(Error::new(
+                    content.span(),
+                    "if_changed needs an `include` pattern",
+                ));
+            };
+            return Ok(Self::Rules { include, exclude });
+        }
+        Ok(Self::Globs(glob_list(input)?))
+    }
+}
+
+/// A string literal or a bracketed list of them.
+fn glob_list(input: ParseStream) -> Result<Vec<String>> {
+    if input.peek(syn::token::Bracket) {
+        let content;
+        bracketed!(content in input);
+        return glob_items(&content);
+    }
+    let lit: LitStr = input.parse()?;
+    Ok(vec![lit.value()])
+}
+
+/// The already-unwrapped contents of a pattern list.
+fn glob_items(input: ParseStream) -> Result<Vec<String>> {
+    let mut values = Vec::new();
+    while !input.is_empty() {
+        let lit: LitStr = input.parse()?;
+        values.push(lit.value());
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    Ok(values)
+}
+
+fn if_changed_tokens(value: &Option<IfChangedValue>) -> TokenStream2 {
+    let Some(value) = value else {
+        return quote! {};
+    };
+    let tokens = match value {
+        IfChangedValue::Globs(globs) => {
+            quote! { ::rust_buildkite::IfChanged::Array(vec![ #( #globs.to_string() ),* ]) }
+        }
+        IfChangedValue::Rules { include, exclude } => {
+            let include_tokens = quote! { ::rust_buildkite::IfChangedObjectInclude::Array(vec![ #( #include.to_string() ),* ]) };
+            let exclude_tokens = if exclude.is_empty() {
+                quote! { None }
+            } else {
+                quote! { Some(::rust_buildkite::IfChangedObjectExclude::Array(vec![ #( #exclude.to_string() ),* ])) }
+            };
+            quote! { ::rust_buildkite::IfChanged::Object { include: #include_tokens, exclude: #exclude_tokens } }
+        }
+    };
+    quote! { .if_changed(Some(#tokens)) }
 }
