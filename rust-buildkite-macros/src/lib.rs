@@ -2068,6 +2068,10 @@ impl StepDef {
                         step.retry = Some(config);
                     }
                 }
+                "no_default_plugins" => {
+                    let val: syn::LitBool = content.parse()?;
+                    step.no_default_plugins = val.value();
+                }
                 "plugins" => {
                     let plugins_content;
                     bracketed!(plugins_content in content);
@@ -4488,6 +4492,10 @@ struct CommandStepDef {
     cache: Option<CacheConfig>,
     retry: Option<RetryConfig>,
     plugins: Vec<NestedValue>,
+    /// Skip `default_plugins` for this step only. A host-only step — an image build that
+    /// needs the agent's own Docker daemon, say — cannot run inside the default `docker`
+    /// plugin, and nothing else in the macro can express that.
+    no_default_plugins: bool,
     notify: Vec<NestedValue>,
     matrix: Option<NestedValue>,
     concurrency: Option<syn::LitInt>,
@@ -4923,6 +4931,7 @@ impl CommandStepDef {
             cache: None,
             retry: None,
             plugins: Vec::new(),
+            no_default_plugins: false,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -4951,6 +4960,7 @@ impl CommandStepDef {
             cache: None,
             retry: None,
             plugins: Vec::new(),
+            no_default_plugins: false,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -4978,6 +4988,7 @@ impl CommandStepDef {
             cache: None,
             retry: None,
             plugins: Vec::new(),
+            no_default_plugins: false,
             notify: Vec::new(),
             matrix: None,
             concurrency: None,
@@ -5308,7 +5319,7 @@ impl CommandStepDef {
         #[cfg_attr(not(feature = "bazel"), allow(unused_variables))]
         bazel_config: BazelCodegenConfig,
     ) -> TokenStream2 {
-        if default_plugins.is_empty() {
+        if default_plugins.is_empty() || self.no_default_plugins {
             return self.to_tokens_inner_with_bazel_config(bazel_config);
         }
 
